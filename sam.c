@@ -16,10 +16,10 @@ static void Insert(unsigned char position, unsigned char mem60, unsigned char me
 static void InsertBreath();
 static void PrepareOutput();
 static void SetMouthThroat(unsigned char mouth, unsigned char throat);
-
 static void ProcessFrames(unsigned char mem48);
 static void RenderSample(unsigned char* mem66, unsigned char consonantFlag, unsigned char mem49);
 static unsigned char CreateTransitions();
+static void AddInflection(unsigned char mem48, unsigned char X);
 
 #define PHONEME_PERIOD (1)
 #define PHONEME_QUESTION (2)
@@ -36,8 +36,10 @@ static unsigned char frequency3[256];
 static unsigned char amplitude1[256];
 static unsigned char amplitude2[256];
 static unsigned char amplitude3[256];
+static unsigned char sampledConsonantFlag[256]; // tab44800
 
-static unsigned char input[256]; // tab39445
+static unsigned char* input;
+static unsigned char inputtemp[256]; // copy of input during rendering
 
 // standard sam sound
 static unsigned char speed = 72;
@@ -45,91 +47,68 @@ static unsigned char pitch = 64;
 static unsigned char mouth = 128;
 static unsigned char throat = 128;
 
-unsigned char stress[256]; // numbers from 0 to 8
-unsigned char phonemeLength[256]; // tab40160
-unsigned char phonemeindex[256];
+static unsigned char stress[256]; // numbers from 0 to 8
+static unsigned char phonemeLength[256]; // tab40160
+static unsigned char phonemeindex[256];
 
-unsigned char phonemeIndexOutput[60]; // tab47296
-unsigned char stressOutput[60]; // tab47365
-unsigned char phonemeLengthOutput[60]; // tab47416
+static unsigned char phonemeIndexOutput[60]; // tab47296
+static unsigned char stressOutput[60]; // tab47365
+static unsigned char phonemeLengthOutput[60]; // tab47416
 
 // contains the final soundbuffer
-int bufferpos = 0;
-char* buffer = NULL;
-
-unsigned char sampledConsonantFlag[256]; // tab44800
-
-unsigned char tab48426[5] = { 0x18, 0x1A, 0x17, 0x17, 0x17 };
-
-unsigned char tab47492[] = 
-{
-	0 , 0 , 0xE0 , 0xE6 , 0xEC , 0xF3 , 0xF9 , 0 , 
-	6 , 0xC , 6
-};
-
-
-unsigned char amplitudeRescale[] = 
-{
-	0 , 1 , 2 , 2 , 2 , 3 , 3 , 4 ,
-	4 , 5 , 6 , 8 , 9 ,0xB ,0xD ,0xF, 0  //17 elements?
-};
+static int bufferpos = 0;
+static char* buffer = NULL;
 
 // Used to decide which phoneme's blend lengths. The candidate with the lower score is selected.
-// tab45856 
-unsigned char blendRank[] = 
-{
-	0 , 0x1F , 0x1F , 0x1F , 0x1F , 2 , 2 , 2 ,
-	2 , 2 , 2 , 2 , 2 , 2 , 5 , 5 ,
-	2 ,0xA , 2 , 8 , 5 , 5 ,0xB ,0xA ,
-	9 , 8 , 8 , 0xA0 , 8 , 8 , 0x17 , 0x1F ,
-	0x12 , 0x12 , 0x12 , 0x12 , 0x1E , 0x1E , 0x14 , 0x14 ,
-	0x14 , 0x14 , 0x17 , 0x17 , 0x1A , 0x1A , 0x1D , 0x1D ,
-	2 , 2 , 2 , 2 , 2 , 2 , 0x1A , 0x1D ,
-	0x1B , 0x1A , 0x1D , 0x1B , 0x1A , 0x1D , 0x1B , 0x1A ,
-	0x1D , 0x1B , 0x17 , 0x1D , 0x17 , 0x17 , 0x1D , 0x17 ,
-	0x17 , 0x1D , 0x17 , 0x17 , 0x1D , 0x17 , 0x17 , 0x17
+// tab45856
+static const unsigned char blendRank[] = {
+    0, 0x1F, 0x1F, 0x1F, 0x1F, 2, 2, 2,
+    2, 2, 2, 2, 2, 2, 5, 5,
+    2, 0xA, 2, 8, 5, 5, 0xB, 0xA,
+    9, 8, 8, 0xA0, 8, 8, 0x17, 0x1F,
+    0x12, 0x12, 0x12, 0x12, 0x1E, 0x1E, 0x14, 0x14,
+    0x14, 0x14, 0x17, 0x17, 0x1A, 0x1A, 0x1D, 0x1D,
+    2, 2, 2, 2, 2, 2, 0x1A, 0x1D,
+    0x1B, 0x1A, 0x1D, 0x1B, 0x1A, 0x1D, 0x1B, 0x1A,
+    0x1D, 0x1B, 0x17, 0x1D, 0x17, 0x17, 0x1D, 0x17,
+    0x17, 0x1D, 0x17, 0x17, 0x1D, 0x17, 0x17, 0x17
 };
-
 
 // Number of frames at the end of a phoneme devoted to interpolating to next phoneme's final value
-//tab45696
-unsigned char outBlendLength[] = 
-{
-	0 , 2 , 2 , 2 , 2 , 4 , 4 , 4 ,
-	4 , 4 , 4 , 4 , 4 , 4 , 4 , 4 ,
-	4 , 4 , 3 , 2 , 4 , 4 , 2 , 2 ,
-	2 , 2 , 2 , 1 , 1 , 1 , 1 , 1 ,
-	1 , 1 , 1 , 1 , 1 , 1 , 2 , 2 ,
-	2 , 1 , 0 , 1 , 0 , 1 , 0 , 5 ,
-	5 , 5 , 5 , 5 , 4 , 4 , 2 , 0 ,
-	1 , 2 , 0 , 1 , 2 , 0 , 1 , 2 ,
-	0 , 1 , 2 , 0 , 2 , 2 , 0 , 1 ,
-	3 , 0 , 2 , 3 , 0 , 2 , 0xA0 , 0xA0
+// tab45696
+static const unsigned char outBlendLength[] = {
+    0, 2, 2, 2, 2, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 3, 2, 4, 4, 2, 2,
+    2, 2, 2, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 2, 2,
+    2, 1, 0, 1, 0, 1, 0, 5,
+    5, 5, 5, 5, 4, 4, 2, 0,
+    1, 2, 0, 1, 2, 0, 1, 2,
+    0, 1, 2, 0, 2, 2, 0, 1,
+    3, 0, 2, 3, 0, 2, 0xA0, 0xA0
 };
-
 
 // Number of frames at beginning of a phoneme devoted to interpolating to phoneme's final value
 // tab45776
-unsigned char inBlendLength[] = 
-{
-	0 , 2 , 2 , 2 , 2 , 4 , 4 , 4 ,
-	4 , 4 , 4 , 4 , 4 , 4 , 4 , 4 ,
-	4 , 4 , 3 , 3 , 4 , 4 , 3 , 3 ,
-	3 , 3 , 3 , 1 , 2 , 3 , 2 , 1 ,
-	3 , 3 , 3 , 3 , 1 , 1 , 3 , 3 ,
-	3 , 2 , 2 , 3 , 2 , 3 , 0 , 0 ,
-	5 , 5 , 5 , 5 , 4 , 4 , 2 , 0 ,
-	2 , 2 , 0 , 3 , 2 , 0 , 4 , 2 ,
-	0 , 3 , 2 , 0 , 2 , 2 , 0 , 2 ,
-	3 , 0 , 3 , 3 , 0 , 3 , 0xB0 , 0xA0 
+static const unsigned char inBlendLength[] = {
+    0, 2, 2, 2, 2, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 3, 3, 4, 4, 3, 3,
+    3, 3, 3, 1, 2, 3, 2, 1,
+    3, 3, 3, 3, 1, 1, 3, 3,
+    3, 2, 2, 3, 2, 3, 0, 0,
+    5, 5, 5, 5, 4, 4, 2, 0,
+    2, 2, 0, 3, 2, 0, 4, 2,
+    0, 3, 2, 0, 2, 2, 0, 2,
+    3, 0, 3, 3, 0, 3, 0xB0, 0xA0
 };
-
 
 // Looks like it's used as bit flags
 // High bits masked by 248 (11111000)
 //
 // 32: S*    241         11110001
-// 33: SH    226         11100010    
+// 33: SH    226         11100010
 // 34: F*    211         11010011
 // 35: TH    187         10111011
 // 36: /H    124         01111100
@@ -143,434 +122,242 @@ unsigned char inBlendLength[] =
 // 67: **    27          00011011
 // 70: **    25          00011001
 // tab45936
-unsigned char sampledConsonantFlags[] =
-{
-    0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-    0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-    0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-    0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-    0xF1 , 0xE2 , 0xD3 , 0xBB , 0x7C , 0x95 , 1 , 2 ,
-    3 , 3 , 0 , 0x72 , 0 , 2 , 0 , 0 ,
-    0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-    0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-    0 , 0 , 0 , 0x1B , 0 , 0 , 0x19 , 0 ,
-    0 , 0 , 0 , 0 , 0 , 0 , 0 , 0
+static const unsigned char sampledConsonantFlags[] = {
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0xF1, 0xE2, 0xD3, 0xBB, 0x7C, 0x95, 1, 2,
+    3, 3, 0, 0x72, 0, 2, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0x1B, 0, 0, 0x19, 0,
+    0, 0, 0, 0, 0, 0, 0, 0
 };
 
-
-//tab45056
-unsigned char freq1data[]=
-{
-	0x00 ,0x13 ,0x13 ,0x13 ,0x13 , 0xA , 0xE ,0x12
-	,  0x18 ,0x1A ,0x16 ,0x14 ,0x10 ,0x14 , 0xE ,0x12
-	,	0xE ,0x12 ,0x12 ,0x10 , 0xC , 0xE , 0xA ,0x12
-	,	0xE ,0xA  , 8  , 6  , 6  ,  6 ,  6 ,0x11
-	,	 6 , 6 , 6 , 6 ,0xE , 0x10 , 9 ,0xA
-	,	 8 ,0xA , 6 , 6 , 6 , 5 , 6 , 0
-	,  0x12 , 0x1A , 0x14 , 0x1A , 0x12 ,0xC , 6 , 6
-	,	 6 , 6 , 6 , 6 , 6 , 6 , 6 , 6
-	,	 6 , 6 , 6 , 6 , 6 , 6 , 6 , 6
-	,	 6 ,0xA ,0xA , 6 , 6 , 6 , 0x2C , 0x13
+// tab45056
+static unsigned char freq1data[] = {
+    0x00, 0x13, 0x13, 0x13, 0x13, 0xA, 0xE, 0x12, 0x18, 0x1A, 0x16, 0x14, 0x10, 0x14, 0xE, 0x12,
+    0xE, 0x12, 0x12, 0x10, 0xC, 0xE, 0xA, 0x12, 0xE, 0xA, 8, 6, 6, 6, 6, 0x11,
+    6, 6, 6, 6, 0xE, 0x10, 9, 0xA, 8, 0xA, 6, 6, 6, 5, 6, 0,
+    0x12, 0x1A, 0x14, 0x1A, 0x12, 0xC, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 0xA, 0xA, 6, 6, 6, 0x2C, 0x13
 };
 
-//tab451356
-unsigned char freq2data[]=
-{
-	0x00 , 0x43 , 0x43 , 0x43 , 0x43 , 0x54 , 0x48 , 0x42 ,
-	0x3E , 0x28 , 0x2C , 0x1E , 0x24 , 0x2C , 0x48 , 0x30 ,
-	0x24 , 0x1E , 0x32 , 0x24 , 0x1C , 0x44 , 0x18 , 0x32 ,
-	0x1E , 0x18 , 0x52 , 0x2E , 0x36 , 0x56 , 0x36 , 0x43 ,
-	0x49 , 0x4F , 0x1A , 0x42 , 0x49 , 0x25 , 0x33 , 0x42 ,
-	0x28 , 0x2F , 0x4F , 0x4F , 0x42 , 0x4F , 0x6E , 0x00 ,
-	0x48 , 0x26 , 0x1E , 0x2A , 0x1E , 0x22 , 0x1A , 0x1A ,
-	0x1A , 0x42 , 0x42 , 0x42 , 0x6E , 0x6E , 0x6E , 0x54 ,
-	0x54 , 0x54 , 0x1A , 0x1A , 0x1A , 0x42 , 0x42 , 0x42 ,
-	0x6D , 0x56 , 0x6D , 0x54 , 0x54 , 0x54 , 0x7F , 0x7F
+// tab451356
+static unsigned char freq2data[] = {
+    0x00, 0x43, 0x43, 0x43, 0x43, 0x54, 0x48, 0x42,
+    0x3E, 0x28, 0x2C, 0x1E, 0x24, 0x2C, 0x48, 0x30,
+    0x24, 0x1E, 0x32, 0x24, 0x1C, 0x44, 0x18, 0x32,
+    0x1E, 0x18, 0x52, 0x2E, 0x36, 0x56, 0x36, 0x43,
+    0x49, 0x4F, 0x1A, 0x42, 0x49, 0x25, 0x33, 0x42,
+    0x28, 0x2F, 0x4F, 0x4F, 0x42, 0x4F, 0x6E, 0x00,
+    0x48, 0x26, 0x1E, 0x2A, 0x1E, 0x22, 0x1A, 0x1A,
+    0x1A, 0x42, 0x42, 0x42, 0x6E, 0x6E, 0x6E, 0x54,
+    0x54, 0x54, 0x1A, 0x1A, 0x1A, 0x42, 0x42, 0x42,
+    0x6D, 0x56, 0x6D, 0x54, 0x54, 0x54, 0x7F, 0x7F
 };
 
-//tab45216
-unsigned char freq3data[]=
-{
-	0x00 , 0x5B , 0x5B , 0x5B , 0x5B , 0x6E , 0x5D , 0x5B ,
-	0x58 , 0x59 , 0x57 , 0x58 , 0x52 , 0x59 , 0x5D , 0x3E ,
-	0x52 , 0x58 , 0x3E , 0x6E , 0x50 , 0x5D , 0x5A , 0x3C ,
-	0x6E , 0x5A , 0x6E , 0x51 , 0x79 , 0x65 , 0x79 , 0x5B ,
-	0x63 , 0x6A , 0x51 , 0x79 , 0x5D , 0x52 , 0x5D , 0x67 ,
-	0x4C , 0x5D , 0x65 , 0x65 , 0x79 , 0x65 , 0x79 , 0x00 ,
-	0x5A , 0x58 , 0x58 , 0x58 , 0x58 , 0x52 , 0x51 , 0x51 ,
-	0x51 , 0x79 , 0x79 , 0x79 , 0x70 , 0x6E , 0x6E , 0x5E ,
-	0x5E , 0x5E , 0x51 , 0x51 , 0x51 , 0x79 , 0x79 , 0x79 ,
-	0x65 , 0x65 , 0x70 , 0x5E , 0x5E , 0x5E , 0x08 , 0x01   
+// tab45216
+static unsigned char freq3data[] = {
+    0x00, 0x5B, 0x5B, 0x5B, 0x5B, 0x6E, 0x5D, 0x5B,
+    0x58, 0x59, 0x57, 0x58, 0x52, 0x59, 0x5D, 0x3E,
+    0x52, 0x58, 0x3E, 0x6E, 0x50, 0x5D, 0x5A, 0x3C,
+    0x6E, 0x5A, 0x6E, 0x51, 0x79, 0x65, 0x79, 0x5B,
+    0x63, 0x6A, 0x51, 0x79, 0x5D, 0x52, 0x5D, 0x67,
+    0x4C, 0x5D, 0x65, 0x65, 0x79, 0x65, 0x79, 0x00,
+    0x5A, 0x58, 0x58, 0x58, 0x58, 0x52, 0x51, 0x51,
+    0x51, 0x79, 0x79, 0x79, 0x70, 0x6E, 0x6E, 0x5E,
+    0x5E, 0x5E, 0x51, 0x51, 0x51, 0x79, 0x79, 0x79,
+    0x65, 0x65, 0x70, 0x5E, 0x5E, 0x5E, 0x08, 0x01
 };
 
-unsigned char ampl1data[] = 
-{
-	0 , 0 , 0 , 0 , 0 ,0xD ,0xD ,0xE ,
-	0xF ,0xF ,0xF ,0xF ,0xF ,0xC ,0xD ,0xC ,
-	0xF ,0xF ,0xD ,0xD ,0xD ,0xE ,0xD ,0xC ,
-	0xD ,0xD ,0xD ,0xC , 9 , 9 , 0 , 0 ,
-	0 , 0 , 0 , 0 , 0 , 0 ,0xB ,0xB ,
-	0xB ,0xB , 0 , 0 , 1 ,0xB , 0 , 2 ,
-	0xE ,0xF ,0xF ,0xF ,0xF ,0xD , 2 , 4 ,
-	0 , 2 , 4 , 0 , 1 , 4 , 0 , 1 ,
-	4 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-	0 ,0xC , 0 , 0 , 0 , 0 ,0xF ,0xF
+static const unsigned char ampl1data[] = {
+    0, 0, 0, 0, 0, 0xD, 0xD, 0xE,
+    0xF, 0xF, 0xF, 0xF, 0xF, 0xC, 0xD, 0xC,
+    0xF, 0xF, 0xD, 0xD, 0xD, 0xE, 0xD, 0xC,
+    0xD, 0xD, 0xD, 0xC, 9, 9, 0, 0,
+    0, 0, 0, 0, 0, 0, 0xB, 0xB,
+    0xB, 0xB, 0, 0, 1, 0xB, 0, 2,
+    0xE, 0xF, 0xF, 0xF, 0xF, 0xD, 2, 4,
+    0, 2, 4, 0, 1, 4, 0, 1,
+    4, 0, 0, 0, 0, 0, 0, 0,
+    0, 0xC, 0, 0, 0, 0, 0xF, 0xF
 };
 
-unsigned char ampl2data[] = 
-{
-	0 , 0 , 0 , 0 , 0 ,0xA ,0xB ,0xD ,
-	0xE ,0xD ,0xC ,0xC ,0xB , 9 ,0xB ,0xB ,
-	0xC ,0xC ,0xC , 8 , 8 ,0xC , 8 ,0xA ,
-	8 , 8 ,0xA , 3 , 9 , 6 , 0 , 0 ,
-	0 , 0 , 0 , 0 , 0 , 0 , 3 , 5 ,
-	3 , 4 , 0 , 0 , 0 , 5 ,0xA , 2 ,
-	0xE ,0xD ,0xC ,0xD ,0xC , 8 , 0 , 1 ,
-	0 , 0 , 1 , 0 , 0 , 1 , 0 , 0 ,
-	1 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-	0 ,0xA , 0 , 0 ,0xA , 0 , 0 , 0
+static const unsigned char ampl2data[] = {
+    0, 0, 0, 0, 0, 0xA, 0xB, 0xD,
+    0xE, 0xD, 0xC, 0xC, 0xB, 9, 0xB, 0xB,
+    0xC, 0xC, 0xC, 8, 8, 0xC, 8, 0xA,
+    8, 8, 0xA, 3, 9, 6, 0, 0,
+    0, 0, 0, 0, 0, 0, 3, 5,
+    3, 4, 0, 0, 0, 5, 0xA, 2,
+    0xE, 0xD, 0xC, 0xD, 0xC, 8, 0, 1,
+    0, 0, 1, 0, 0, 1, 0, 0,
+    1, 0, 0, 0, 0, 0, 0, 0,
+    0, 0xA, 0, 0, 0xA, 0, 0, 0
 };
 
-unsigned char ampl3data[] = 
-{
-	0 , 0 , 0 , 0 , 0 , 8 , 7 , 8 ,
-	8 , 1 , 1 , 0 , 1 , 0 , 7 , 5 ,
-	1 , 0 , 6 , 1 , 0 , 7 , 0 , 5 ,
-	1 , 0 , 8 , 0 , 0 , 3 , 0 , 0 ,
-	0 , 0 , 0 , 0 , 0 , 0 , 0 , 1 ,
-	0 , 0 , 0 , 0 , 0 , 1 ,0xE , 1 ,
-	9 , 1 , 0 , 1 , 0 , 0 , 0 , 0 ,
-	0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-	0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 ,
-	0 , 7 , 0 , 0 , 5 , 0 , 0x13 , 0x10
+static const unsigned char ampl3data[] = {
+    0, 0, 0, 0, 0, 8, 7, 8,
+    8, 1, 1, 0, 1, 0, 7, 5,
+    1, 0, 6, 1, 0, 7, 0, 5,
+    1, 0, 8, 0, 0, 3, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 1,
+    0, 0, 0, 0, 0, 1, 0xE, 1,
+    9, 1, 0, 1, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 7, 0, 0, 5, 0, 0x13, 0x10
 };
 
-
-
-//tab42240
-unsigned char sinus[] = 
-{
-	0x00 , 0x00 , 0x00 , 0x10 , 0x10 , 0x10 , 0x10 , 0x10 ,
-	0x10 , 0x20 , 0x20 , 0x20 , 0x20 , 0x20 , 0x20 , 0x30 ,
-	0x30 , 0x30 , 0x30 , 0x30 , 0x30 , 0x30 , 0x40 , 0x40 ,
-	0x40 , 0x40 , 0x40 , 0x40 , 0x40 , 0x50 , 0x50 , 0x50 ,
-	0x50 , 0x50 , 0x50 , 0x50 , 0x50 , 0x60 , 0x60 , 0x60 , 
-	0x60 , 0x60 , 0x60 , 0x60 , 0x60 , 0x60 , 0x60 , 0x60 ,
-	0x60 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x60 , 0x60 , 0x60 , 0x60 , 0x60 , 0x60 , 0x60 , 0x60 ,
-	0x60 , 0x60 , 0x60 , 0x60 , 0x50 , 0x50 , 0x50 , 0x50 ,
-	0x50 , 0x50 , 0x50 , 0x50 , 0x40 , 0x40 , 0x40 , 0x40 ,
-	0x40 , 0x40 , 0x40 , 0x30 , 0x30 , 0x30 , 0x30 , 0x30 ,
-	0x30 , 0x30 , 0x20 , 0x20 , 0x20 , 0x20 , 0x20 , 0x20 ,
-	0x10 , 0x10 , 0x10 , 0x10 , 0x10 , 0x10 , 0x00 , 0x00 ,
-	0x00 , 0x00 , 0x00 , 0xF0 , 0xF0 , 0xF0 , 0xF0 , 0xF0 ,
-	0xF0 , 0xE0 , 0xE0 , 0xE0 , 0xE0 , 0xE0 , 0xE0 , 0xD0 ,
-	0xD0 , 0xD0 , 0xD0 , 0xD0 , 0xD0 , 0xD0 , 0xC0 , 0xC0 ,
-	0xC0 , 0xC0 , 0xC0 , 0xC0 , 0xC0 , 0xB0 , 0xB0 , 0xB0 ,
-	0xB0 , 0xB0 , 0xB0 , 0xB0 , 0xB0 , 0xA0 , 0xA0 , 0xA0 ,
-	0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xA0 ,
-	0xA0 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xA0 ,
-	0xA0 , 0xA0 , 0xA0 , 0xA0 , 0xB0 , 0xB0 , 0xB0 , 0xB0 ,
-	0xB0 , 0xB0 , 0xB0 , 0xB0 , 0xC0 , 0xC0 , 0xC0 , 0xC0 ,
-	0xC0 , 0xC0 , 0xC0 , 0xD0 , 0xD0 , 0xD0 , 0xD0 , 0xD0 ,
-	0xD0 , 0xD0 , 0xE0 , 0xE0 , 0xE0 , 0xE0 , 0xE0 , 0xE0 ,
-	0xF0 , 0xF0 , 0xF0 , 0xF0 , 0xF0 , 0xF0 , 0x00 , 0x00 };
-
-//tab42496
-unsigned char rectangle[] = 
-{
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 , 0x90 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 ,
-	0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70 , 0x70
+// tab42240
+static const signed char sinetable[256] = {
+    0, 3, 6, 9, 12, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46,
+    49, 51, 54, 57, 60, 63, 65, 68, 71, 73, 76, 78, 81, 83, 85, 88,
+    90, 92, 94, 96, 98, 100, 102, 104, 106, 107, 109, 111, 112, 113, 115, 116,
+    117, 118, 120, 121, 122, 122, 123, 124, 125, 125, 126, 126, 126, 127, 127, 127,
+    127, 127, 127, 127, 126, 126, 126, 125, 125, 124, 123, 122, 122, 121, 120, 118,
+    117, 116, 115, 113, 112, 111, 109, 107, 106, 104, 102, 100, 98, 96, 94, 92,
+    90, 88, 85, 83, 81, 78, 76, 73, 71, 68, 65, 63, 60, 57, 54, 51,
+    49, 46, 43, 40, 37, 34, 31, 28, 25, 22, 19, 16, 12, 9, 6, 3,
+    0, -3, -6, -9, -12, -16, -19, -22, -25, -28, -31, -34, -37, -40, -43, -46,
+    -49, -51, -54, -57, -60, -63, -65, -68, -71, -73, -76, -78, -81, -83, -85, -88,
+    -90, -92, -94, -96, -98, -100, -102, -104, -106, -107, -109, -111, -112, -113, -115, -116,
+    -117, -118, -120, -121, -122, -122, -123, -124, -125, -125, -126, -126, -126, -127, -127, -127,
+    -127, -127, -127, -127, -126, -126, -126, -125, -125, -124, -123, -122, -122, -121, -120, -118,
+    -117, -116, -115, -113, -112, -111, -109, -107, -106, -104, -102, -100, -98, -96, -94, -92,
+    -90, -88, -85, -83, -81, -78, -76, -73, -71, -68, -65, -63, -60, -57, -54, -51,
+    -49, -46, -43, -40, -37, -34, -31, -28, -25, -22, -19, -16, -12, -9, -6, -3
 };
 
-
-//tab42752
-unsigned char multtable[] = 
-{
-	0x00 , 0x00 , 0x00 , 0x00 , 0x00 , 0x00 , 0x00 , 0x00 ,
-	0x00 , 0x00 , 0x00 , 0x00 , 0x00 , 0x00 , 0x00 , 0x00 ,
-	0x00 , 0x00 , 0x01 , 0x01 , 0x02 , 0x02 , 0x03 , 0x03 ,
-	0x04 , 0x04 , 0x05 , 0x05 , 0x06 , 0x06 , 0x07 , 0x07 ,
-	0x00 , 0x01 , 0x02 , 0x03 , 0x04 , 0x05 , 0x06 , 0x07 ,
-	0x08 , 0x09 , 0x0A , 0x0B , 0x0C , 0x0D , 0x0E , 0x0F ,
-	0x00 , 0x01 , 0x03 , 0x04 , 0x06 , 0x07 , 0x09 , 0x0A ,
-	0x0C , 0x0D , 0x0F , 0x10 , 0x12 , 0x13 , 0x15 , 0x16 ,
-	0x00 , 0x02 , 0x04 , 0x06 , 0x08 , 0x0A , 0x0C , 0x0E ,
-	0x10 , 0x12 , 0x14 , 0x16 , 0x18 , 0x1A , 0x1C , 0x1E ,
-	0x00 , 0x02 , 0x05 , 0x07 , 0x0A , 0x0C , 0x0F , 0x11 ,
-	0x14 , 0x16 , 0x19 , 0x1B , 0x1E , 0x20 , 0x23 , 0x25 ,
-	0x00 , 0x03 , 0x06 , 0x09 , 0x0C , 0x0F , 0x12 , 0x15 ,
-	0x18 , 0x1B , 0x1E , 0x21 , 0x24 , 0x27 , 0x2A , 0x2D ,
-	0x00 , 0x03 , 0x07 , 0x0A , 0x0E , 0x11 , 0x15 , 0x18 ,
-	0x1C , 0x1F , 0x23 , 0x26 , 0x2A , 0x2D , 0x31 , 0x34 ,
-	0x00 , 0xFC , 0xF8 , 0xF4 , 0xF0 , 0xEC , 0xE8 , 0xE4 ,
-	0xE0 , 0xDC , 0xD8 , 0xD4 , 0xD0 , 0xCC , 0xC8 , 0xC4 ,
-	0x00 , 0xFC , 0xF9 , 0xF5 , 0xF2 , 0xEE , 0xEB , 0xE7 ,
-	0xE4 , 0xE0 , 0xDD , 0xD9 , 0xD6 , 0xD2 , 0xCF , 0xCB ,
-	0x00 , 0xFD , 0xFA , 0xF7 , 0xF4 , 0xF1 , 0xEE , 0xEB ,
-	0xE8 , 0xE5 , 0xE2 , 0xDF , 0xDC , 0xD9 , 0xD6 , 0xD3 ,
-	0x00 , 0xFD , 0xFB , 0xF8 , 0xF6 , 0xF3 , 0xF1 , 0xEE ,
-	0xEC , 0xE9 , 0xE7 , 0xE4 , 0xE2 , 0xDF , 0xDD , 0xDA ,
-	0x00 , 0xFE , 0xFC , 0xFA , 0xF8 , 0xF6 , 0xF4 , 0xF2 ,
-	0xF0 , 0xEE , 0xEC , 0xEA , 0xE8 , 0xE6 , 0xE4 , 0xE2 ,
-	0x00 , 0xFE , 0xFD , 0xFB , 0xFA , 0xF8 , 0xF7 , 0xF5 ,
-	0xF4 , 0xF2 , 0xF1 , 0xEF , 0xEE , 0xEC , 0xEB , 0xE9 ,
-	0x00 , 0xFF , 0xFE , 0xFD , 0xFC , 0xFB , 0xFA , 0xF9 ,
-	0xF8 , 0xF7 , 0xF6 , 0xF5 , 0xF4 , 0xF3 , 0xF2 , 0xF1 ,
-	0x00 , 0xFF , 0xFF , 0xFE , 0xFE , 0xFD , 0xFD , 0xFC ,
-	0xFC , 0xFB , 0xFB , 0xFA , 0xFA , 0xF9 , 0xF9 , 0xF8   
+// tab42496
+static const unsigned char rectangle[] = {
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70
 };
 
-//random data ?
-unsigned char sampleTable[0x500] =
-{
-	//00
-
-	0x38 , 0x84 , 0x6B , 0x19 , 0xC6 , 0x63 ,  0x18 , 0x86
-	,  0x73 , 0x98 , 0xC6 , 0xB1 , 0x1C , 0xCA , 0x31 , 0x8C
-	,  0xC7 , 0x31 , 0x88 , 0xC2 , 0x30 , 0x98 , 0x46 , 0x31
-	,  0x18 , 0xC6 , 0x35 ,0xC , 0xCA , 0x31 ,0xC , 0xC6
-	//20
-	,  0x21 , 0x10 , 0x24 , 0x69 , 0x12 , 0xC2 , 0x31 , 0x14
-	,  0xC4 , 0x71 , 8 , 0x4A , 0x22 , 0x49 , 0xAB , 0x6A
-	,  0xA8 , 0xAC , 0x49 , 0x51 , 0x32 , 0xD5 , 0x52 , 0x88
-	,  0x93 , 0x6C , 0x94 , 0x22 , 0x15 , 0x54 , 0xD2 , 0x25
-	//40
-	,  0x96 , 0xD4 , 0x50 , 0xA5 , 0x46 , 0x21 , 8 , 0x85
-	,  0x6B , 0x18 , 0xC4 , 0x63 , 0x10 , 0xCE , 0x6B , 0x18
-	,  0x8C , 0x71 , 0x19 , 0x8C , 0x63 , 0x35 ,0xC , 0xC6
-	,  0x33 , 0x99 , 0xCC , 0x6C , 0xB5 , 0x4E , 0xA2 , 0x99
-	//60
-	,  0x46 , 0x21 , 0x28 , 0x82 , 0x95 , 0x2E , 0xE3 , 0x30
-	,  0x9C , 0xC5 , 0x30 , 0x9C , 0xA2 , 0xB1 , 0x9C , 0x67
-	,  0x31 , 0x88 , 0x66 , 0x59 , 0x2C , 0x53 , 0x18 , 0x84
-	,  0x67 , 0x50 , 0xCA , 0xE3 ,0xA , 0xAC , 0xAB , 0x30
-	//80
-	,  0xAC , 0x62 , 0x30 , 0x8C , 0x63 , 0x10 , 0x94 , 0x62
-	,  0xB1 , 0x8C , 0x82 , 0x28 , 0x96 , 0x33 , 0x98 , 0xD6
-	,  0xB5 , 0x4C , 0x62 , 0x29 , 0xA5 , 0x4A , 0xB5 , 0x9C
-	,  0xC6 , 0x31 , 0x14 , 0xD6 , 0x38 , 0x9C , 0x4B , 0xB4
-	//A0
-	,  0x86 , 0x65 , 0x18 , 0xAE , 0x67 , 0x1C , 0xA6 , 0x63
-	,  0x19 , 0x96 , 0x23 , 0x19 , 0x84 , 0x13 , 8 , 0xA6
-	,  0x52 , 0xAC , 0xCA , 0x22 , 0x89 , 0x6E , 0xAB , 0x19
-	,  0x8C , 0x62 , 0x34 , 0xC4 , 0x62 , 0x19 , 0x86 , 0x63
-	//C0
-	,  0x18 , 0xC4 , 0x23 , 0x58 , 0xD6 , 0xA3 , 0x50 , 0x42
-	,  0x54 , 0x4A , 0xAD , 0x4A , 0x25 , 0x11 , 0x6B , 0x64
-	,  0x89 , 0x4A , 0x63 , 0x39 , 0x8A , 0x23 , 0x31 , 0x2A
-	,  0xEA , 0xA2 , 0xA9 , 0x44 , 0xC5 , 0x12 , 0xCD , 0x42
-	//E0
-	,  0x34 , 0x8C , 0x62 , 0x18 , 0x8C , 0x63 , 0x11 , 0x48
-	,  0x66 , 0x31 , 0x9D , 0x44 , 0x33 , 0x1D , 0x46 , 0x31
-	,  0x9C , 0xC6 , 0xB1 ,0xC , 0xCD , 0x32 , 0x88 , 0xC4
-	,  0x73 , 0x18 , 0x86 , 0x73 , 8 , 0xD6 , 0x63 , 0x58
-	//100
-	,	 7 , 0x81 , 0xE0 , 0xF0 , 0x3C , 7 , 0x87 , 0x90
-	,  0x3C , 0x7C ,0xF , 0xC7 , 0xC0 , 0xC0 , 0xF0 , 0x7C
-	,  0x1E , 7 , 0x80 , 0x80 , 0 , 0x1C , 0x78 , 0x70
-	,  0xF1 , 0xC7 , 0x1F , 0xC0 ,0xC , 0xFE , 0x1C , 0x1F
-	//120
-	,  0x1F ,0xE ,0xA , 0x7A , 0xC0 , 0x71 , 0xF2 , 0x83
-	,  0x8F , 3 ,0xF ,0xF ,0xC , 0 , 0x79 , 0xF8
-	,  0x61 , 0xE0 , 0x43 ,0xF , 0x83 , 0xE7 , 0x18 , 0xF9
-	,  0xC1 , 0x13 , 0xDA , 0xE9 , 0x63 , 0x8F ,0xF , 0x83
-	//140
-	,  0x83 , 0x87 , 0xC3 , 0x1F , 0x3C , 0x70 , 0xF0 , 0xE1
-	,  0xE1 , 0xE3 , 0x87 , 0xB8 , 0x71 ,0xE , 0x20 , 0xE3
-	,  0x8D , 0x48 , 0x78 , 0x1C , 0x93 , 0x87 , 0x30 , 0xE1
-	,  0xC1 , 0xC1 , 0xE4 , 0x78 , 0x21 , 0x83 , 0x83 , 0xC3
-	//160
-	,  0x87 , 6 , 0x39 , 0xE5 , 0xC3 , 0x87 , 7 ,0xE
-	,  0x1C , 0x1C , 0x70 , 0xF4 , 0x71 , 0x9C , 0x60 , 0x36
-	,  0x32 , 0xC3 , 0x1E , 0x3C , 0xF3 , 0x8F ,0xE , 0x3C
-	,  0x70 , 0xE3 , 0xC7 , 0x8F ,0xF ,0xF ,0xE , 0x3C
-	//180
-	,  0x78 , 0xF0 , 0xE3 , 0x87 , 6 , 0xF0 , 0xE3 , 7
-	,  0xC1 , 0x99 , 0x87 ,0xF , 0x18 , 0x78 , 0x70 , 0x70
-	,  0xFC , 0xF3 , 0x10 , 0xB1 , 0x8C , 0x8C , 0x31 , 0x7C
-	,  0x70 , 0xE1 , 0x86 , 0x3C , 0x64 , 0x6C , 0xB0 , 0xE1
-	//1A0
-	,  0xE3 ,0xF , 0x23 , 0x8F ,0xF , 0x1E , 0x3E , 0x38
-	,  0x3C , 0x38 , 0x7B , 0x8F , 7 ,0xE , 0x3C , 0xF4
-	,  0x17 , 0x1E , 0x3C , 0x78 , 0xF2 , 0x9E , 0x72 , 0x49
-	,  0xE3 , 0x25 , 0x36 , 0x38 , 0x58 , 0x39 , 0xE2 , 0xDE
-	//1C0
-	,  0x3C , 0x78 , 0x78 , 0xE1 , 0xC7 , 0x61 , 0xE1 , 0xE1
-	,  0xB0 , 0xF0 , 0xF0 , 0xC3 , 0xC7 ,0xE , 0x38 , 0xC0
-	,  0xF0 , 0xCE , 0x73 , 0x73 , 0x18 , 0x34 , 0xB0 , 0xE1
-	,  0xC7 , 0x8E , 0x1C , 0x3C , 0xF8 , 0x38 , 0xF0 , 0xE1
-	//1E0
-	,  0xC1 , 0x8B , 0x86 , 0x8F , 0x1C , 0x78 , 0x70 , 0xF0
-	,  0x78 , 0xAC , 0xB1 , 0x8F , 0x39 , 0x31 , 0xDB , 0x38
-	,  0x61 , 0xC3 ,0xE ,0xE , 0x38 , 0x78 , 0x73 , 0x17
-	,  0x1E , 0x39 , 0x1E , 0x38 , 0x64 , 0xE1 , 0xF1 , 0xC1
-	//200
-	,  0x4E ,0xF , 0x40 , 0xA2 , 2 , 0xC5 , 0x8F , 0x81
-	,  0xA1 , 0xFC , 0x12 , 8 , 0x64 , 0xE0 , 0x3C , 0x22
-	,  0xE0 , 0x45 , 7 , 0x8E ,0xC , 0x32 , 0x90 , 0xF0
-	,  0x1F , 0x20 , 0x49 , 0xE0 , 0xF8 ,0xC , 0x60 , 0xF0
-	//220
-	,  0x17 , 0x1A , 0x41 , 0xAA , 0xA4 , 0xD0 , 0x8D , 0x12
-	,  0x82 , 0x1E , 0x1E , 3 , 0xF8 , 0x3E , 3 ,0xC
-	,  0x73 , 0x80 , 0x70 , 0x44 , 0x26 , 3 , 0x24 , 0xE1
-	,  0x3E , 4 , 0x4E , 4 , 0x1C , 0xC1 , 9 , 0xCC
-	//240
-	,  0x9E , 0x90 , 0x21 , 7 , 0x90 , 0x43 , 0x64 , 0xC0
-	,	0xF , 0xC6 , 0x90 , 0x9C , 0xC1 , 0x5B , 3 , 0xE2
-	,  0x1D , 0x81 , 0xE0 , 0x5E , 0x1D , 3 , 0x84 , 0xB8
-	,  0x2C ,0xF , 0x80 , 0xB1 , 0x83 , 0xE0 , 0x30 , 0x41
-	//260
-	,  0x1E , 0x43 , 0x89 , 0x83 , 0x50 , 0xFC , 0x24 , 0x2E
-	,  0x13 , 0x83 , 0xF1 , 0x7C , 0x4C , 0x2C , 0xC9 ,0xD
-	,  0x83 , 0xB0 , 0xB5 , 0x82 , 0xE4 , 0xE8 , 6 , 0x9C
-	,	 7 , 0xA0 , 0x99 , 0x1D , 7 , 0x3E , 0x82 , 0x8F
-	//280
-	,  0x70 , 0x30 , 0x74 , 0x40 , 0xCA , 0x10 , 0xE4 , 0xE8
-	,	0xF , 0x92 , 0x14 , 0x3F , 6 , 0xF8 , 0x84 , 0x88
-	,  0x43 , 0x81 ,0xA , 0x34 , 0x39 , 0x41 , 0xC6 , 0xE3
-	,  0x1C , 0x47 , 3 , 0xB0 , 0xB8 , 0x13 ,0xA , 0xC2
-	//2A0
-	,  0x64 , 0xF8 , 0x18 , 0xF9 , 0x60 , 0xB3 , 0xC0 , 0x65
-	,  0x20 , 0x60 , 0xA6 , 0x8C , 0xC3 , 0x81 , 0x20 , 0x30
-	,  0x26 , 0x1E , 0x1C , 0x38 , 0xD3 , 1 , 0xB0 , 0x26
-	,  0x40 , 0xF4 ,0xB , 0xC3 , 0x42 , 0x1F , 0x85 , 0x32
-	//2C0
-	,  0x26 , 0x60 , 0x40 , 0xC9 , 0xCB , 1 , 0xEC , 0x11
-	,  0x28 , 0x40 , 0xFA , 4 , 0x34 , 0xE0 , 0x70 , 0x4C
-	,  0x8C , 0x1D , 7 , 0x69 , 3 , 0x16 , 0xC8 , 4
-	,  0x23 , 0xE8 , 0xC6 , 0x9A ,0xB , 0x1A , 3 , 0xE0
-	//2E0
-	,  0x76 , 6 , 5 , 0xCF , 0x1E , 0xBC , 0x58 , 0x31
-	,  0x71 , 0x66 , 0 , 0xF8 , 0x3F , 4 , 0xFC ,0xC
-	,  0x74 , 0x27 , 0x8A , 0x80 , 0x71 , 0xC2 , 0x3A , 0x26
-	,	 6 , 0xC0 , 0x1F , 5 ,0xF , 0x98 , 0x40 , 0xAE
-	//300
-	,	 1 , 0x7F , 0xC0 , 7 , 0xFF , 0 ,0xE , 0xFE
-	,	 0 , 3 , 0xDF , 0x80 , 3 , 0xEF , 0x80 , 0x1B
-	,  0xF1 , 0xC2 , 0 , 0xE7 , 0xE0 , 0x18 , 0xFC , 0xE0
-	,  0x21 , 0xFC , 0x80 , 0x3C , 0xFC , 0x40 ,0xE , 0x7E
-	//320
-	,	 0 , 0x3F , 0x3E , 0 ,0xF , 0xFE , 0 , 0x1F
-	,  0xFF , 0 , 0x3E , 0xF0 , 7 , 0xFC , 0 , 0x7E
-	,  0x10 , 0x3F , 0xFF , 0 , 0x3F , 0x38 ,0xE , 0x7C
-	,	 1 , 0x87 ,0xC , 0xFC , 0xC7 , 0 , 0x3E , 4
-	//340
-	,	0xF , 0x3E , 0x1F ,0xF ,0xF , 0x1F ,0xF , 2
-	,  0x83 , 0x87 , 0xCF , 3 , 0x87 ,0xF , 0x3F , 0xC0
-	,	 7 , 0x9E , 0x60 , 0x3F , 0xC0 , 3 , 0xFE , 0
-	,  0x3F , 0xE0 , 0x77 , 0xE1 , 0xC0 , 0xFE , 0xE0 , 0xC3
-	//360
-	,  0xE0 , 1 , 0xDF , 0xF8 , 3 , 7 , 0 , 0x7E
-	,  0x70 , 0 , 0x7C , 0x38 , 0x18 , 0xFE ,0xC , 0x1E
-	,  0x78 , 0x1C , 0x7C , 0x3E ,0xE , 0x1F , 0x1E , 0x1E
-	,  0x3E , 0 , 0x7F , 0x83 , 7 , 0xDB , 0x87 , 0x83
-	//380
-	,	 7 , 0xC7 , 7 , 0x10 , 0x71 , 0xFF , 0 , 0x3F
-	,  0xE2 , 1 , 0xE0 , 0xC1 , 0xC3 , 0xE1 , 0 , 0x7F
-	,  0xC0 , 5 , 0xF0 , 0x20 , 0xF8 , 0xF0 , 0x70 , 0xFE
-	,  0x78 , 0x79 , 0xF8 , 2 , 0x3F ,0xC , 0x8F , 3
-	//3a0
-	,	0xF , 0x9F , 0xE0 , 0xC1 , 0xC7 , 0x87 , 3 , 0xC3
-	,  0xC3 , 0xB0 , 0xE1 , 0xE1 , 0xC1 , 0xE3 , 0xE0 , 0x71
-	,  0xF0 , 0 , 0xFC , 0x70 , 0x7C ,0xC , 0x3E , 0x38
-	,	0xE , 0x1C , 0x70 , 0xC3 , 0xC7 , 3 , 0x81 , 0xC1
-	//3c0
-	,  0xC7 , 0xE7 , 0 ,0xF , 0xC7 , 0x87 , 0x19 , 9
-	,  0xEF , 0xC4 , 0x33 , 0xE0 , 0xC1 , 0xFC , 0xF8 , 0x70
-	,  0xF0 , 0x78 , 0xF8 , 0xF0 , 0x61 , 0xC7 , 0 , 0x1F
-	,  0xF8 , 1 , 0x7C , 0xF8 , 0xF0 , 0x78 , 0x70 , 0x3C
-	//3e0
-	,  0x7C , 0xCE ,0xE , 0x21 , 0x83 , 0xCF , 8 , 7
-	,  0x8F , 8 , 0xC1 , 0x87 , 0x8F , 0x80 , 0xC7 , 0xE3
-	,	 0 , 7 , 0xF8 , 0xE0 , 0xEF , 0 , 0x39 , 0xF7
-	,  0x80 ,0xE , 0xF8 , 0xE1 , 0xE3 , 0xF8 , 0x21 , 0x9F
-	//400
-	,  0xC0 , 0xFF , 3 , 0xF8 , 7 , 0xC0 , 0x1F , 0xF8
-	,  0xC4 , 4 , 0xFC , 0xC4 , 0xC1 , 0xBC , 0x87 , 0xF0
-	,	0xF , 0xC0 , 0x7F , 5 , 0xE0 , 0x25 , 0xEC , 0xC0
-	,  0x3E , 0x84 , 0x47 , 0xF0 , 0x8E , 3 , 0xF8 , 3
-	//420
-	,  0xFB , 0xC0 , 0x19 , 0xF8 , 7 , 0x9C ,0xC , 0x17
-	,  0xF8 , 7 , 0xE0 , 0x1F , 0xA1 , 0xFC ,0xF , 0xFC
-	,	 1 , 0xF0 , 0x3F , 0 , 0xFE , 3 , 0xF0 , 0x1F
-	,	 0 , 0xFD , 0 , 0xFF , 0x88 ,0xD , 0xF9 , 1
-	//440
-	,  0xFF , 0 , 0x70 , 7 , 0xC0 , 0x3E , 0x42 , 0xF3
-	,	0xD , 0xC4 , 0x7F , 0x80 , 0xFC , 7 , 0xF0 , 0x5E
-	,  0xC0 , 0x3F , 0 , 0x78 , 0x3F , 0x81 , 0xFF , 1
-	,  0xF8 , 1 , 0xC3 , 0xE8 ,0xC , 0xE4 , 0x64 , 0x8F
-	////460
-	,  0xE4 ,0xF , 0xF0 , 7 , 0xF0 , 0xC2 , 0x1F , 0
-	,  0x7F , 0xC0 , 0x6F , 0x80 , 0x7E , 3 , 0xF8 , 7
-	,  0xF0 , 0x3F , 0xC0 , 0x78 ,0xF , 0x82 , 7 , 0xFE
-	,  0x22 , 0x77 , 0x70 , 2 , 0x76 , 3 , 0xFE , 0
-	//480
-	,  0xFE , 0x67 , 0 , 0x7C , 0xC7 , 0xF1 , 0x8E , 0xC6
-	,  0x3B , 0xE0 , 0x3F , 0x84 , 0xF3 , 0x19 , 0xD8 , 3
-	,  0x99 , 0xFC , 9 , 0xB8 ,0xF , 0xF8 , 0 , 0x9D
-	,  0x24 , 0x61 , 0xF9 ,0xD , 0 , 0xFD , 3 , 0xF0
-	//4a0
-	,  0x1F , 0x90 , 0x3F , 1 , 0xF8 , 0x1F , 0xD0 ,0xF
-	,  0xF8 , 0x37 , 1 , 0xF8 , 7 , 0xF0 ,0xF , 0xC0
-	,  0x3F , 0 , 0xFE , 3 , 0xF8 ,0xF , 0xC0 , 0x3F
-	,	 0 , 0xFA , 3 , 0xF0 ,0xF , 0x80 , 0xFF , 1
-	//4c0
-	,  0xB8 , 7 , 0xF0 , 1 , 0xFC , 1 , 0xBC , 0x80
-	,  0x13 , 0x1E , 0 , 0x7F , 0xE1 , 0x40 , 0x7F , 0xA0
-	,  0x7F , 0xB0 , 0 , 0x3F , 0xC0 , 0x1F , 0xC0 , 0x38
-	,	0xF , 0xF0 , 0x1F , 0x80 , 0xFF , 1 , 0xFC , 3
-	//4e0
-	,  0xF1 , 0x7E , 1 , 0xFE , 1 , 0xF0 , 0xFF , 0 
-	,  0x7F , 0xC0 , 0x1D , 7 , 0xF0 ,0xF , 0xC0 , 0x7E 
-	,	 6 , 0xE0 , 7 , 0xE0 ,0xF , 0xF8 , 6 , 0xC1 
-	,  0xFE , 1 , 0xFC , 3 , 0xE0 ,0xF , 0 , 0xFC
+// random data ?
+static const unsigned char sampleTable[0x500] = {
+    0x38, 0x84, 0x6B, 0x19, 0xC6, 0x63, 0x18, 0x86, 0x73, 0x98, 0xC6, 0xB1, 0x1C, 0xCA, 0x31, 0x8C,
+    0xC7, 0x31, 0x88, 0xC2, 0x30, 0x98, 0x46, 0x31, 0x18, 0xC6, 0x35, 0xC, 0xCA, 0x31, 0xC, 0xC6,
+    0x21, 0x10, 0x24, 0x69, 0x12, 0xC2, 0x31, 0x14, 0xC4, 0x71, 8, 0x4A, 0x22, 0x49, 0xAB, 0x6A,
+    0xA8, 0xAC, 0x49, 0x51, 0x32, 0xD5, 0x52, 0x88, 0x93, 0x6C, 0x94, 0x22, 0x15, 0x54, 0xD2, 0x25,
+    0x96, 0xD4, 0x50, 0xA5, 0x46, 0x21, 8, 0x85, 0x6B, 0x18, 0xC4, 0x63, 0x10, 0xCE, 0x6B, 0x18,
+    0x8C, 0x71, 0x19, 0x8C, 0x63, 0x35, 0xC, 0xC6, 0x33, 0x99, 0xCC, 0x6C, 0xB5, 0x4E, 0xA2, 0x99,
+    0x46, 0x21, 0x28, 0x82, 0x95, 0x2E, 0xE3, 0x30, 0x9C, 0xC5, 0x30, 0x9C, 0xA2, 0xB1, 0x9C, 0x67,
+    0x31, 0x88, 0x66, 0x59, 0x2C, 0x53, 0x18, 0x84, 0x67, 0x50, 0xCA, 0xE3, 0xA, 0xAC, 0xAB, 0x30,
+    0xAC, 0x62, 0x30, 0x8C, 0x63, 0x10, 0x94, 0x62, 0xB1, 0x8C, 0x82, 0x28, 0x96, 0x33, 0x98, 0xD6,
+    0xB5, 0x4C, 0x62, 0x29, 0xA5, 0x4A, 0xB5, 0x9C, 0xC6, 0x31, 0x14, 0xD6, 0x38, 0x9C, 0x4B, 0xB4,
+    0x86, 0x65, 0x18, 0xAE, 0x67, 0x1C, 0xA6, 0x63, 0x19, 0x96, 0x23, 0x19, 0x84, 0x13, 8, 0xA6,
+    0x52, 0xAC, 0xCA, 0x22, 0x89, 0x6E, 0xAB, 0x19, 0x8C, 0x62, 0x34, 0xC4, 0x62, 0x19, 0x86, 0x63,
+    0x18, 0xC4, 0x23, 0x58, 0xD6, 0xA3, 0x50, 0x42, 0x54, 0x4A, 0xAD, 0x4A, 0x25, 0x11, 0x6B, 0x64,
+    0x89, 0x4A, 0x63, 0x39, 0x8A, 0x23, 0x31, 0x2A, 0xEA, 0xA2, 0xA9, 0x44, 0xC5, 0x12, 0xCD, 0x42,
+    0x34, 0x8C, 0x62, 0x18, 0x8C, 0x63, 0x11, 0x48, 0x66, 0x31, 0x9D, 0x44, 0x33, 0x1D, 0x46, 0x31,
+    0x9C, 0xC6, 0xB1, 0xC, 0xCD, 0x32, 0x88, 0xC4, 0x73, 0x18, 0x86, 0x73, 8, 0xD6, 0x63, 0x58,
+    7, 0x81, 0xE0, 0xF0, 0x3C, 7, 0x87, 0x90, 0x3C, 0x7C, 0xF, 0xC7, 0xC0, 0xC0, 0xF0, 0x7C,
+    0x1E, 7, 0x80, 0x80, 0, 0x1C, 0x78, 0x70, 0xF1, 0xC7, 0x1F, 0xC0, 0xC, 0xFE, 0x1C, 0x1F,
+    0x1F, 0xE, 0xA, 0x7A, 0xC0, 0x71, 0xF2, 0x83, 0x8F, 3, 0xF, 0xF, 0xC, 0, 0x79, 0xF8,
+    0x61, 0xE0, 0x43, 0xF, 0x83, 0xE7, 0x18, 0xF9, 0xC1, 0x13, 0xDA, 0xE9, 0x63, 0x8F, 0xF, 0x83,
+    0x83, 0x87, 0xC3, 0x1F, 0x3C, 0x70, 0xF0, 0xE1, 0xE1, 0xE3, 0x87, 0xB8, 0x71, 0xE, 0x20, 0xE3,
+    0x8D, 0x48, 0x78, 0x1C, 0x93, 0x87, 0x30, 0xE1, 0xC1, 0xC1, 0xE4, 0x78, 0x21, 0x83, 0x83, 0xC3,
+    0x87, 6, 0x39, 0xE5, 0xC3, 0x87, 7, 0xE, 0x1C, 0x1C, 0x70, 0xF4, 0x71, 0x9C, 0x60, 0x36,
+    0x32, 0xC3, 0x1E, 0x3C, 0xF3, 0x8F, 0xE, 0x3C, 0x70, 0xE3, 0xC7, 0x8F, 0xF, 0xF, 0xE, 0x3C,
+    0x78, 0xF0, 0xE3, 0x87, 6, 0xF0, 0xE3, 7, 0xC1, 0x99, 0x87, 0xF, 0x18, 0x78, 0x70, 0x70,
+    0xFC, 0xF3, 0x10, 0xB1, 0x8C, 0x8C, 0x31, 0x7C, 0x70, 0xE1, 0x86, 0x3C, 0x64, 0x6C, 0xB0, 0xE1,
+    0xE3, 0xF, 0x23, 0x8F, 0xF, 0x1E, 0x3E, 0x38, 0x3C, 0x38, 0x7B, 0x8F, 7, 0xE, 0x3C, 0xF4,
+    0x17, 0x1E, 0x3C, 0x78, 0xF2, 0x9E, 0x72, 0x49, 0xE3, 0x25, 0x36, 0x38, 0x58, 0x39, 0xE2, 0xDE,
+    0x3C, 0x78, 0x78, 0xE1, 0xC7, 0x61, 0xE1, 0xE1, 0xB0, 0xF0, 0xF0, 0xC3, 0xC7, 0xE, 0x38, 0xC0,
+    0xF0, 0xCE, 0x73, 0x73, 0x18, 0x34, 0xB0, 0xE1, 0xC7, 0x8E, 0x1C, 0x3C, 0xF8, 0x38, 0xF0, 0xE1,
+    0xC1, 0x8B, 0x86, 0x8F, 0x1C, 0x78, 0x70, 0xF0, 0x78, 0xAC, 0xB1, 0x8F, 0x39, 0x31, 0xDB, 0x38,
+    0x61, 0xC3, 0xE, 0xE, 0x38, 0x78, 0x73, 0x17, 0x1E, 0x39, 0x1E, 0x38, 0x64, 0xE1, 0xF1, 0xC1,
+    0x4E, 0xF, 0x40, 0xA2, 2, 0xC5, 0x8F, 0x81, 0xA1, 0xFC, 0x12, 8, 0x64, 0xE0, 0x3C, 0x22,
+    0xE0, 0x45, 7, 0x8E, 0xC, 0x32, 0x90, 0xF0, 0x1F, 0x20, 0x49, 0xE0, 0xF8, 0xC, 0x60, 0xF0,
+    0x17, 0x1A, 0x41, 0xAA, 0xA4, 0xD0, 0x8D, 0x12, 0x82, 0x1E, 0x1E, 3, 0xF8, 0x3E, 3, 0xC,
+    0x73, 0x80, 0x70, 0x44, 0x26, 3, 0x24, 0xE1, 0x3E, 4, 0x4E, 4, 0x1C, 0xC1, 9, 0xCC,
+    0x9E, 0x90, 0x21, 7, 0x90, 0x43, 0x64, 0xC0, 0xF, 0xC6, 0x90, 0x9C, 0xC1, 0x5B, 3, 0xE2,
+    0x1D, 0x81, 0xE0, 0x5E, 0x1D, 3, 0x84, 0xB8, 0x2C, 0xF, 0x80, 0xB1, 0x83, 0xE0, 0x30, 0x41,
+    0x1E, 0x43, 0x89, 0x83, 0x50, 0xFC, 0x24, 0x2E, 0x13, 0x83, 0xF1, 0x7C, 0x4C, 0x2C, 0xC9, 0xD,
+    0x83, 0xB0, 0xB5, 0x82, 0xE4, 0xE8, 6, 0x9C, 7, 0xA0, 0x99, 0x1D, 7, 0x3E, 0x82, 0x8F,
+    0x70, 0x30, 0x74, 0x40, 0xCA, 0x10, 0xE4, 0xE8, 0xF, 0x92, 0x14, 0x3F, 6, 0xF8, 0x84, 0x88,
+    0x43, 0x81, 0xA, 0x34, 0x39, 0x41, 0xC6, 0xE3, 0x1C, 0x47, 3, 0xB0, 0xB8, 0x13, 0xA, 0xC2,
+    0x64, 0xF8, 0x18, 0xF9, 0x60, 0xB3, 0xC0, 0x65, 0x20, 0x60, 0xA6, 0x8C, 0xC3, 0x81, 0x20, 0x30,
+    0x26, 0x1E, 0x1C, 0x38, 0xD3, 1, 0xB0, 0x26, 0x40, 0xF4, 0xB, 0xC3, 0x42, 0x1F, 0x85, 0x32,
+    0x26, 0x60, 0x40, 0xC9, 0xCB, 1, 0xEC, 0x11, 0x28, 0x40, 0xFA, 4, 0x34, 0xE0, 0x70, 0x4C,
+    0x8C, 0x1D, 7, 0x69, 3, 0x16, 0xC8, 4, 0x23, 0xE8, 0xC6, 0x9A, 0xB, 0x1A, 3, 0xE0,
+    0x76, 6, 5, 0xCF, 0x1E, 0xBC, 0x58, 0x31, 0x71, 0x66, 0, 0xF8, 0x3F, 4, 0xFC, 0xC,
+    0x74, 0x27, 0x8A, 0x80, 0x71, 0xC2, 0x3A, 0x26, 6, 0xC0, 0x1F, 5, 0xF, 0x98, 0x40, 0xAE,
+    1, 0x7F, 0xC0, 7, 0xFF, 0, 0xE, 0xFE, 0, 3, 0xDF, 0x80, 3, 0xEF, 0x80, 0x1B,
+    0xF1, 0xC2, 0, 0xE7, 0xE0, 0x18, 0xFC, 0xE0, 0x21, 0xFC, 0x80, 0x3C, 0xFC, 0x40, 0xE, 0x7E,
+    0, 0x3F, 0x3E, 0, 0xF, 0xFE, 0, 0x1F, 0xFF, 0, 0x3E, 0xF0, 7, 0xFC, 0, 0x7E,
+    0x10, 0x3F, 0xFF, 0, 0x3F, 0x38, 0xE, 0x7C, 1, 0x87, 0xC, 0xFC, 0xC7, 0, 0x3E, 4,
+    0xF, 0x3E, 0x1F, 0xF, 0xF, 0x1F, 0xF, 2, 0x83, 0x87, 0xCF, 3, 0x87, 0xF, 0x3F, 0xC0,
+    7, 0x9E, 0x60, 0x3F, 0xC0, 3, 0xFE, 0, 0x3F, 0xE0, 0x77, 0xE1, 0xC0, 0xFE, 0xE0, 0xC3,
+    0xE0, 1, 0xDF, 0xF8, 3, 7, 0, 0x7E, 0x70, 0, 0x7C, 0x38, 0x18, 0xFE, 0xC, 0x1E,
+    0x78, 0x1C, 0x7C, 0x3E, 0xE, 0x1F, 0x1E, 0x1E, 0x3E, 0, 0x7F, 0x83, 7, 0xDB, 0x87, 0x83,
+    7, 0xC7, 7, 0x10, 0x71, 0xFF, 0, 0x3F, 0xE2, 1, 0xE0, 0xC1, 0xC3, 0xE1, 0, 0x7F,
+    0xC0, 5, 0xF0, 0x20, 0xF8, 0xF0, 0x70, 0xFE, 0x78, 0x79, 0xF8, 2, 0x3F, 0xC, 0x8F, 3,
+    0xF, 0x9F, 0xE0, 0xC1, 0xC7, 0x87, 3, 0xC3, 0xC3, 0xB0, 0xE1, 0xE1, 0xC1, 0xE3, 0xE0, 0x71,
+    0xF0, 0, 0xFC, 0x70, 0x7C, 0xC, 0x3E, 0x38, 0xE, 0x1C, 0x70, 0xC3, 0xC7, 3, 0x81, 0xC1,
+    0xC7, 0xE7, 0, 0xF, 0xC7, 0x87, 0x19, 9, 0xEF, 0xC4, 0x33, 0xE0, 0xC1, 0xFC, 0xF8, 0x70,
+    0xF0, 0x78, 0xF8, 0xF0, 0x61, 0xC7, 0, 0x1F, 0xF8, 1, 0x7C, 0xF8, 0xF0, 0x78, 0x70, 0x3C,
+    0x7C, 0xCE, 0xE, 0x21, 0x83, 0xCF, 8, 7, 0x8F, 8, 0xC1, 0x87, 0x8F, 0x80, 0xC7, 0xE3,
+    0, 7, 0xF8, 0xE0, 0xEF, 0, 0x39, 0xF7, 0x80, 0xE, 0xF8, 0xE1, 0xE3, 0xF8, 0x21, 0x9F,
+    0xC0, 0xFF, 3, 0xF8, 7, 0xC0, 0x1F, 0xF8, 0xC4, 4, 0xFC, 0xC4, 0xC1, 0xBC, 0x87, 0xF0,
+    0xF, 0xC0, 0x7F, 5, 0xE0, 0x25, 0xEC, 0xC0, 0x3E, 0x84, 0x47, 0xF0, 0x8E, 3, 0xF8, 3,
+    0xFB, 0xC0, 0x19, 0xF8, 7, 0x9C, 0xC, 0x17, 0xF8, 7, 0xE0, 0x1F, 0xA1, 0xFC, 0xF, 0xFC,
+    1, 0xF0, 0x3F, 0, 0xFE, 3, 0xF0, 0x1F, 0, 0xFD, 0, 0xFF, 0x88, 0xD, 0xF9, 1,
+    0xFF, 0, 0x70, 7, 0xC0, 0x3E, 0x42, 0xF3, 0xD, 0xC4, 0x7F, 0x80, 0xFC, 7, 0xF0, 0x5E,
+    0xC0, 0x3F, 0, 0x78, 0x3F, 0x81, 0xFF, 1, 0xF8, 1, 0xC3, 0xE8, 0xC, 0xE4, 0x64, 0x8F,
+    0xE4, 0xF, 0xF0, 7, 0xF0, 0xC2, 0x1F, 0, 0x7F, 0xC0, 0x6F, 0x80, 0x7E, 3, 0xF8, 7,
+    0xF0, 0x3F, 0xC0, 0x78, 0xF, 0x82, 7, 0xFE, 0x22, 0x77, 0x70, 2, 0x76, 3, 0xFE, 0,
+    0xFE, 0x67, 0, 0x7C, 0xC7, 0xF1, 0x8E, 0xC6, 0x3B, 0xE0, 0x3F, 0x84, 0xF3, 0x19, 0xD8, 3,
+    0x99, 0xFC, 9, 0xB8, 0xF, 0xF8, 0, 0x9D, 0x24, 0x61, 0xF9, 0xD, 0, 0xFD, 3, 0xF0,
+    0x1F, 0x90, 0x3F, 1, 0xF8, 0x1F, 0xD0, 0xF, 0xF8, 0x37, 1, 0xF8, 7, 0xF0, 0xF, 0xC0,
+    0x3F, 0, 0xFE, 3, 0xF8, 0xF, 0xC0, 0x3F, 0, 0xFA, 3, 0xF0, 0xF, 0x80, 0xFF, 1,
+    0xB8, 7, 0xF0, 1, 0xFC, 1, 0xBC, 0x80, 0x13, 0x1E, 0, 0x7F, 0xE1, 0x40, 0x7F, 0xA0,
+    0x7F, 0xB0, 0, 0x3F, 0xC0, 0x1F, 0xC0, 0x38, 0xF, 0xF0, 0x1F, 0x80, 0xFF, 1, 0xFC, 3,
+    0xF1, 0x7E, 1, 0xFE, 1, 0xF0, 0xFF, 0, 0x7F, 0xC0, 0x1D, 7, 0xF0, 0xF, 0xC0, 0x7E,
+    6, 0xE0, 7, 0xE0, 0xF, 0xF8, 6, 0xC1, 0xFE, 1, 0xFC, 3, 0xE0, 0xF, 0, 0xFC
 };
 
 // tab40672
-unsigned char stressInputTable[] = {
+static const unsigned char stressInputTable[] = {
     '*', '1', '2', '3', '4', '5', '6', '7', '8'
 };
 
 // tab40682
-unsigned char signInputTable1[] = {
+static const unsigned char signInputTable1[] = {
     ' ', '.', '?', ',', '-', 'I', 'I', 'E',
     'A', 'A', 'A', 'A', 'U', 'A', 'I', 'E',
     'U', 'O', 'R', 'L', 'W', 'Y', 'W', 'R',
@@ -585,7 +372,7 @@ unsigned char signInputTable1[] = {
 };
 
 // tab40763
-unsigned char signInputTable2[] = {
+static const unsigned char signInputTable2[] = {
     '*', '*', '*', '*', '*', 'Y', 'H', 'H',
     'E', 'A', 'H', 'O', 'H', 'X', 'X', 'R',
     'X', 'H', 'X', 'X', 'X', 'X', 'H', '*',
@@ -617,7 +404,7 @@ enum {
     FLAG_FRICATIVE = 0x2000
 };
 
-unsigned short flags[] = {
+static const unsigned short flags[] = {
     0x8000, 0xC100, 0xC100, 0xC100, 0xC100, 0x00A4, 0x00A4, 0x00A4,
     0x00A4, 0x00A4, 0x00A4, 0x0084, 0x0084, 0x00A4, 0x00A4, 0x0084,
     0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0084, 0x0044, 0x1044,
@@ -772,588 +559,576 @@ enum {
     pR = 23,
     pD = 57,
     pT = 69,
+    EOL = 155,
     BREAK = 254,
     END = 255
 };
 
-
-
-
-
-//some flags
-unsigned char tab36376[] = 
-{
-	0, 0, 0, 0, 0, 0, 0, 0, // 0-7
-	0, 0, 0, 0, 0, 0, 0, 0, // 8-15
-	0, 0, 0, 0, 0, 0, 0, 0, 
-	0, 0, 0, 0, 0, 0, 0, 0, 
-	0, 2, 2, 2, 2, 2, 2, 130, // ' ', '!'
-	0, 0, 2, 2, 2, 2, 2, 2,
-	3, 3, 3, 3, 3, 3, 3, 3,
-	3, 3, 2, 2, 2, 2, 2, 2,
-	2, 192, 168, 176, 172, 192, 160, 184, // '@', 'A'
-	160, 192, 188, 160, 172, 168, 172, 192, 
-	160, 160, 172, 180, 164, 192, 168, 168,
-	176, 192, 188, 0, 0, 0, 2, 0, // 'X', 'Y', 'Z', '[', 
-	32, 32, 155, 32, 192, 185, 32, 205,
-	163, 76, 138, 142
+// some flags
+static const unsigned char parser_flags[] = {
+    0, 0, 0, 0, 0, 0, 0, 0, // 0-7
+    0, 0, 0, 0, 0, 0, 0, 0, // 8-15
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 2, 2, 2, 2, 2, 2, 130, // ' ', '!'
+    0, 0, 2, 2, 2, 2, 2, 2,
+    3, 3, 3, 3, 3, 3, 3, 3,
+    3, 3, 2, 2, 2, 2, 2, 2,
+    2, 192, 168, 176, 172, 192, 160, 184, // '@', 'A'
+    160, 192, 188, 160, 172, 168, 172, 192,
+    160, 160, 172, 180, 164, 192, 168, 168,
+    176, 192, 188, 0, 0, 0, 2, 0, // 'X', 'Y', 'Z', '[',
+    32, 32, 155, 32, 192, 185, 32, 205,
+    163, 76, 138, 142
 };
 
-char rules[] =
-{
-']','A'|0x80,
-' ','(','A','.',')',                    '=','E','H','4','Y','.',' '|0x80,
-'(','A',')',' ',                        '=','A','H'|0x80,
-' ','(','A','R','E',')',' ',            '=','A','A','R'|0x80,
-' ','(','A','R',')','O',                '=','A','X','R'|0x80,
-'(','A','R',')','#',                    '=','E','H','4','R'|0x80,
-' ','^','(','A','S',')','#',            '=','E','Y','4','S'|0x80,
-'(','A',')','W','A',                    '=','A','X'|0x80,
-'(','A','W',')',                        '=','A','O','5'|0x80,
-' ',':','(','A','N','Y',')',            '=','E','H','4','N','I','Y'|0x80,
-'(','A',')','^','+','#',                '=','E','Y','5'|0x80,
-'#',':','(','A','L','L','Y',')',        '=','U','L','I','Y'|0x80,
-' ','(','A','L',')','#',                '=','U','L'|0x80,
-'(','A','G','A','I','N',')',            '=','A','X','G','E','H','4','N'|0x80,
-'#',':','(','A','G',')','E',            '=','I','H','J'|0x80,
-'(','A',')','^','%',                    '=','E','Y'|0x80,
-'(','A',')','^','+',':','#',            '=','A','E'|0x80,
-' ',':','(','A',')','^','+',' ',        '=','E','Y','4'|0x80,
-' ','(','A','R','R',')',                '=','A','X','R'|0x80,
-'(','A','R','R',')',                    '=','A','E','4','R'|0x80,
-' ','^','(','A','R',')',' ',            '=','A','A','5','R'|0x80,
-'(','A','R',')',                        '=','A','A','5','R'|0x80,
-'(','A','I','R',')',                    '=','E','H','4','R'|0x80,
-'(','A','I',')',                        '=','E','Y','4'|0x80,
-'(','A','Y',')',                        '=','E','Y','5'|0x80,
-'(','A','U',')',                        '=','A','O','4'|0x80,
-'#',':','(','A','L',')',' ',            '=','U','L'|0x80,
-'#',':','(','A','L','S',')',' ',        '=','U','L','Z'|0x80,
-'(','A','L','K',')',                    '=','A','O','4','K'|0x80,
-'(','A','L',')','^',                    '=','A','O','L'|0x80,
-' ',':','(','A','B','L','E',')',        '=','E','Y','4','B','U','L'|0x80,
-'(','A','B','L','E',')',                '=','A','X','B','U','L'|0x80,
-'(','A',')','V','O',                    '=','E','Y','4'|0x80,
-'(','A','N','G',')','+',                '=','E','Y','4','N','J'|0x80,
-'(','A','T','A','R','I',')',            '=','A','H','T','A','A','4','R','I','Y'|0x80,
-'(','A',')','T','O','M',                '=','A','E'|0x80,
-'(','A',')','T','T','I',                '=','A','E'|0x80,
-' ','(','A','T',')',' ',                '=','A','E','T'|0x80,
-' ','(','A',')','T',                    '=','A','H'|0x80,
-'(','A',')',                            '=','A','E'|0x80,
+static const char rules[] = {
+    ']', 'A' | 0x80,
+    ' ', '(', 'A', '.', ')', '=', 'E', 'H', '4', 'Y', '.', ' ' | 0x80,
+    '(', 'A', ')', ' ', '=', 'A', 'H' | 0x80,
+    ' ', '(', 'A', 'R', 'E', ')', ' ', '=', 'A', 'A', 'R' | 0x80,
+    ' ', '(', 'A', 'R', ')', 'O', '=', 'A', 'X', 'R' | 0x80,
+    '(', 'A', 'R', ')', '#', '=', 'E', 'H', '4', 'R' | 0x80,
+    ' ', '^', '(', 'A', 'S', ')', '#', '=', 'E', 'Y', '4', 'S' | 0x80,
+    '(', 'A', ')', 'W', 'A', '=', 'A', 'X' | 0x80,
+    '(', 'A', 'W', ')', '=', 'A', 'O', '5' | 0x80,
+    ' ', ':', '(', 'A', 'N', 'Y', ')', '=', 'E', 'H', '4', 'N', 'I', 'Y' | 0x80,
+    '(', 'A', ')', '^', '+', '#', '=', 'E', 'Y', '5' | 0x80,
+    '#', ':', '(', 'A', 'L', 'L', 'Y', ')', '=', 'U', 'L', 'I', 'Y' | 0x80,
+    ' ', '(', 'A', 'L', ')', '#', '=', 'U', 'L' | 0x80,
+    '(', 'A', 'G', 'A', 'I', 'N', ')', '=', 'A', 'X', 'G', 'E', 'H', '4', 'N' | 0x80,
+    '#', ':', '(', 'A', 'G', ')', 'E', '=', 'I', 'H', 'J' | 0x80,
+    '(', 'A', ')', '^', '%', '=', 'E', 'Y' | 0x80,
+    '(', 'A', ')', '^', '+', ':', '#', '=', 'A', 'E' | 0x80,
+    ' ', ':', '(', 'A', ')', '^', '+', ' ', '=', 'E', 'Y', '4' | 0x80,
+    ' ', '(', 'A', 'R', 'R', ')', '=', 'A', 'X', 'R' | 0x80,
+    '(', 'A', 'R', 'R', ')', '=', 'A', 'E', '4', 'R' | 0x80,
+    ' ', '^', '(', 'A', 'R', ')', ' ', '=', 'A', 'A', '5', 'R' | 0x80,
+    '(', 'A', 'R', ')', '=', 'A', 'A', '5', 'R' | 0x80,
+    '(', 'A', 'I', 'R', ')', '=', 'E', 'H', '4', 'R' | 0x80,
+    '(', 'A', 'I', ')', '=', 'E', 'Y', '4' | 0x80,
+    '(', 'A', 'Y', ')', '=', 'E', 'Y', '5' | 0x80,
+    '(', 'A', 'U', ')', '=', 'A', 'O', '4' | 0x80,
+    '#', ':', '(', 'A', 'L', ')', ' ', '=', 'U', 'L' | 0x80,
+    '#', ':', '(', 'A', 'L', 'S', ')', ' ', '=', 'U', 'L', 'Z' | 0x80,
+    '(', 'A', 'L', 'K', ')', '=', 'A', 'O', '4', 'K' | 0x80,
+    '(', 'A', 'L', ')', '^', '=', 'A', 'O', 'L' | 0x80,
+    ' ', ':', '(', 'A', 'B', 'L', 'E', ')', '=', 'E', 'Y', '4', 'B', 'U', 'L' | 0x80,
+    '(', 'A', 'B', 'L', 'E', ')', '=', 'A', 'X', 'B', 'U', 'L' | 0x80,
+    '(', 'A', ')', 'V', 'O', '=', 'E', 'Y', '4' | 0x80,
+    '(', 'A', 'N', 'G', ')', '+', '=', 'E', 'Y', '4', 'N', 'J' | 0x80,
+    '(', 'A', 'T', 'A', 'R', 'I', ')', '=', 'A', 'H', 'T', 'A', 'A', '4', 'R', 'I', 'Y' | 0x80,
+    '(', 'A', ')', 'T', 'O', 'M', '=', 'A', 'E' | 0x80,
+    '(', 'A', ')', 'T', 'T', 'I', '=', 'A', 'E' | 0x80,
+    ' ', '(', 'A', 'T', ')', ' ', '=', 'A', 'E', 'T' | 0x80,
+    ' ', '(', 'A', ')', 'T', '=', 'A', 'H' | 0x80,
+    '(', 'A', ')', '=', 'A', 'E' | 0x80,
 
-']','B'|0x80,
-' ','(','B',')',' ',                    '=','B','I','Y','4'|0x80,
-' ','(','B','E',')','^','#',            '=','B','I','H'|0x80,
-'(','B','E','I','N','G',')',            '=','B','I','Y','4','I','H','N','X'|0x80,
-' ','(','B','O','T','H',')',' ',        '=','B','O','W','4','T','H'|0x80,
-' ','(','B','U','S',')','#',            '=','B','I','H','4','Z'|0x80,
-'(','B','R','E','A','K',')',            '=','B','R','E','Y','5','K'|0x80,
-'(','B','U','I','L',')',                '=','B','I','H','4','L'|0x80,
-'(','B',')',                            '=','B'|0x80,
+    ']', 'B' | 0x80,
+    ' ', '(', 'B', ')', ' ', '=', 'B', 'I', 'Y', '4' | 0x80,
+    ' ', '(', 'B', 'E', ')', '^', '#', '=', 'B', 'I', 'H' | 0x80,
+    '(', 'B', 'E', 'I', 'N', 'G', ')', '=', 'B', 'I', 'Y', '4', 'I', 'H', 'N', 'X' | 0x80,
+    ' ', '(', 'B', 'O', 'T', 'H', ')', ' ', '=', 'B', 'O', 'W', '4', 'T', 'H' | 0x80,
+    ' ', '(', 'B', 'U', 'S', ')', '#', '=', 'B', 'I', 'H', '4', 'Z' | 0x80,
+    '(', 'B', 'R', 'E', 'A', 'K', ')', '=', 'B', 'R', 'E', 'Y', '5', 'K' | 0x80,
+    '(', 'B', 'U', 'I', 'L', ')', '=', 'B', 'I', 'H', '4', 'L' | 0x80,
+    '(', 'B', ')', '=', 'B' | 0x80,
 
-']','C'|0x80,
-' ','(','C',')',' ',                    '=','S','I','Y','4'|0x80,
-' ','(','C','H',')','^',                '=','K'|0x80,
-'^','E','(','C','H',')',                '=','K'|0x80,
-'(','C','H','A',')','R','#',            '=','K','E','H','5'|0x80,
-'(','C','H',')',                        '=','C','H'|0x80,
-' ','S','(','C','I',')','#',            '=','S','A','Y','4'|0x80,
-'(','C','I',')','A',                    '=','S','H'|0x80,
-'(','C','I',')','O',                    '=','S','H'|0x80,
-'(','C','I',')','E','N',                '=','S','H'|0x80,
-'(','C','I','T','Y',')',                '=','S','I','H','T','I','Y'|0x80,
-'(','C',')','+',                        '=','S'|0x80,
-'(','C','K',')',                        '=','K'|0x80,
-'(','C','O','M','M','O','D','O','R','E',')','=','K','A','A','4','M','A','H','D','O','H','R'|0x80,
-'(','C','O','M',')',                    '=','K','A','H','M'|0x80,
-'(','C','U','I','T',')',                '=','K','I','H','T'|0x80,
-'(','C','R','E','A',')',                '=','K','R','I','Y','E','Y'|0x80,
-'(','C',')',                            '=','K'|0x80,
+    ']', 'C' | 0x80,
+    ' ', '(', 'C', ')', ' ', '=', 'S', 'I', 'Y', '4' | 0x80,
+    ' ', '(', 'C', 'H', ')', '^', '=', 'K' | 0x80,
+    '^', 'E', '(', 'C', 'H', ')', '=', 'K' | 0x80,
+    '(', 'C', 'H', 'A', ')', 'R', '#', '=', 'K', 'E', 'H', '5' | 0x80,
+    '(', 'C', 'H', ')', '=', 'C', 'H' | 0x80,
+    ' ', 'S', '(', 'C', 'I', ')', '#', '=', 'S', 'A', 'Y', '4' | 0x80,
+    '(', 'C', 'I', ')', 'A', '=', 'S', 'H' | 0x80,
+    '(', 'C', 'I', ')', 'O', '=', 'S', 'H' | 0x80,
+    '(', 'C', 'I', ')', 'E', 'N', '=', 'S', 'H' | 0x80,
+    '(', 'C', 'I', 'T', 'Y', ')', '=', 'S', 'I', 'H', 'T', 'I', 'Y' | 0x80,
+    '(', 'C', ')', '+', '=', 'S' | 0x80,
+    '(', 'C', 'K', ')', '=', 'K' | 0x80,
+    '(', 'C', 'O', 'M', 'M', 'O', 'D', 'O', 'R', 'E', ')', '=', 'K', 'A', 'A', '4', 'M', 'A', 'H', 'D', 'O', 'H', 'R' | 0x80,
+    '(', 'C', 'O', 'M', ')', '=', 'K', 'A', 'H', 'M' | 0x80,
+    '(', 'C', 'U', 'I', 'T', ')', '=', 'K', 'I', 'H', 'T' | 0x80,
+    '(', 'C', 'R', 'E', 'A', ')', '=', 'K', 'R', 'I', 'Y', 'E', 'Y' | 0x80,
+    '(', 'C', ')', '=', 'K' | 0x80,
 
-']','D'|0x80,
-' ','(','D',')',' ',                    '=','D','I','Y','4'|0x80,
-' ','(','D','R','.',')',' ',            '=','D','A','A','4','K','T','E','R'|0x80,
-'#',':','(','D','E','D',')',' ',        '=','D','I','H','D'|0x80,
-'.','E','(','D',')',' ',                '=','D'|0x80,
-'#',':','^','E','(','D',')',' ',        '=','T'|0x80,
-' ','(','D','E',')','^','#',            '=','D','I','H'|0x80,
-' ','(','D','O',')',' ',                '=','D','U','W'|0x80,
-' ','(','D','O','E','S',')',            '=','D','A','H','Z'|0x80,
-'(','D','O','N','E',')',' ',            '=','D','A','H','5','N'|0x80,
-'(','D','O','I','N','G',')',            '=','D','U','W','4','I','H','N','X'|0x80,
-' ','(','D','O','W',')',                '=','D','A','W'|0x80,
-'#','(','D','U',')','A',                '=','J','U','W'|0x80,
-'#','(','D','U',')','^','#',            '=','J','A','X'|0x80,
-'(','D',')',                            '=','D'|0x80,
+    ']', 'D' | 0x80,
+    ' ', '(', 'D', ')', ' ', '=', 'D', 'I', 'Y', '4' | 0x80,
+    ' ', '(', 'D', 'R', '.', ')', ' ', '=', 'D', 'A', 'A', '4', 'K', 'T', 'E', 'R' | 0x80,
+    '#', ':', '(', 'D', 'E', 'D', ')', ' ', '=', 'D', 'I', 'H', 'D' | 0x80,
+    '.', 'E', '(', 'D', ')', ' ', '=', 'D' | 0x80,
+    '#', ':', '^', 'E', '(', 'D', ')', ' ', '=', 'T' | 0x80,
+    ' ', '(', 'D', 'E', ')', '^', '#', '=', 'D', 'I', 'H' | 0x80,
+    ' ', '(', 'D', 'O', ')', ' ', '=', 'D', 'U', 'W' | 0x80,
+    ' ', '(', 'D', 'O', 'E', 'S', ')', '=', 'D', 'A', 'H', 'Z' | 0x80,
+    '(', 'D', 'O', 'N', 'E', ')', ' ', '=', 'D', 'A', 'H', '5', 'N' | 0x80,
+    '(', 'D', 'O', 'I', 'N', 'G', ')', '=', 'D', 'U', 'W', '4', 'I', 'H', 'N', 'X' | 0x80,
+    ' ', '(', 'D', 'O', 'W', ')', '=', 'D', 'A', 'W' | 0x80,
+    '#', '(', 'D', 'U', ')', 'A', '=', 'J', 'U', 'W' | 0x80,
+    '#', '(', 'D', 'U', ')', '^', '#', '=', 'J', 'A', 'X' | 0x80,
+    '(', 'D', ')', '=', 'D' | 0x80,
 
-']','E'|0x80,
-' ','(','E',')',' ',                    '=','I','Y','I','Y','4'|0x80,
-'#',':','(','E',')',' ','='|0x80,
-'\'',':','^','(','E',')',' ','='|0x80,
-' ',':','(','E',')',' ',                '=','I','Y'|0x80,
-'#','(','E','D',')',' ',                '=','D'|0x80,
-'#',':','(','E',')','D',' ','='|0x80,
-'(','E','V',')','E','R',                '=','E','H','4','V'|0x80,
-'(','E',')','^','%',                    '=','I','Y','4'|0x80,
-'(','E','R','I',')','#',                '=','I','Y','4','R','I','Y'|0x80,
-'(','E','R','I',')',                    '=','E','H','4','R','I','H'|0x80,
-'#',':','(','E','R',')','#',            '=','E','R'|0x80,
-'(','E','R','R','O','R',')',            '=','E','H','4','R','O','H','R'|0x80,
-'(','E','R','A','S','E',')',            '=','I','H','R','E','Y','5','S'|0x80,
-'(','E','R',')','#',                    '=','E','H','R'|0x80,
-'(','E','R',')',                        '=','E','R'|0x80,
-' ','(','E','V','E','N',')',            '=','I','Y','V','E','H','N'|0x80,
-'#',':','(','E',')','W','='|0x80,
-'@','(','E','W',')',                    '=','U','W'|0x80,
-'(','E','W',')',                        '=','Y','U','W'|0x80,
-'(','E',')','O',                        '=','I','Y'|0x80,
-'#',':','&','(','E','S',')',' ',        '=','I','H','Z'|0x80,
-'#',':','(','E',')','S',' ','='|0x80,
-'#',':','(','E','L','Y',')',' ',        '=','L','I','Y'|0x80,
-'#',':','(','E','M','E','N','T',')',    '=','M','E','H','N','T'|0x80,
-'(','E','F','U','L',')',                '=','F','U','H','L'|0x80,
-'(','E','E',')',                        '=','I','Y','4'|0x80,
-'(','E','A','R','N',')',                '=','E','R','5','N'|0x80,
-' ','(','E','A','R',')','^',            '=','E','R','5'|0x80,
-'(','E','A','D',')',                    '=','E','H','D'|0x80,
-'#',':','(','E','A',')',' ',            '=','I','Y','A','X'|0x80,
-'(','E','A',')','S','U',                '=','E','H','5'|0x80,
-'(','E','A',')',                        '=','I','Y','5'|0x80,
-'(','E','I','G','H',')',                '=','E','Y','4'|0x80,
-'(','E','I',')',                        '=','I','Y','4'|0x80,
-' ','(','E','Y','E',')',                '=','A','Y','4'|0x80,
-'(','E','Y',')',                        '=','I','Y'|0x80,
-'(','E','U',')',                        '=','Y','U','W','5'|0x80,
-'(','E','Q','U','A','L',')',            '=','I','Y','4','K','W','U','L'|0x80,
-'(','E',')',                            '=','E','H'|0x80,
+    ']', 'E' | 0x80,
+    ' ', '(', 'E', ')', ' ', '=', 'I', 'Y', 'I', 'Y', '4' | 0x80,
+    '#', ':', '(', 'E', ')', ' ', '=' | 0x80,
+    '\'', ':', '^', '(', 'E', ')', ' ', '=' | 0x80,
+    ' ', ':', '(', 'E', ')', ' ', '=', 'I', 'Y' | 0x80,
+    '#', '(', 'E', 'D', ')', ' ', '=', 'D' | 0x80,
+    '#', ':', '(', 'E', ')', 'D', ' ', '=' | 0x80,
+    '(', 'E', 'V', ')', 'E', 'R', '=', 'E', 'H', '4', 'V' | 0x80,
+    '(', 'E', ')', '^', '%', '=', 'I', 'Y', '4' | 0x80,
+    '(', 'E', 'R', 'I', ')', '#', '=', 'I', 'Y', '4', 'R', 'I', 'Y' | 0x80,
+    '(', 'E', 'R', 'I', ')', '=', 'E', 'H', '4', 'R', 'I', 'H' | 0x80,
+    '#', ':', '(', 'E', 'R', ')', '#', '=', 'E', 'R' | 0x80,
+    '(', 'E', 'R', 'R', 'O', 'R', ')', '=', 'E', 'H', '4', 'R', 'O', 'H', 'R' | 0x80,
+    '(', 'E', 'R', 'A', 'S', 'E', ')', '=', 'I', 'H', 'R', 'E', 'Y', '5', 'S' | 0x80,
+    '(', 'E', 'R', ')', '#', '=', 'E', 'H', 'R' | 0x80,
+    '(', 'E', 'R', ')', '=', 'E', 'R' | 0x80,
+    ' ', '(', 'E', 'V', 'E', 'N', ')', '=', 'I', 'Y', 'V', 'E', 'H', 'N' | 0x80,
+    '#', ':', '(', 'E', ')', 'W', '=' | 0x80,
+    '@', '(', 'E', 'W', ')', '=', 'U', 'W' | 0x80,
+    '(', 'E', 'W', ')', '=', 'Y', 'U', 'W' | 0x80,
+    '(', 'E', ')', 'O', '=', 'I', 'Y' | 0x80,
+    '#', ':', '&', '(', 'E', 'S', ')', ' ', '=', 'I', 'H', 'Z' | 0x80,
+    '#', ':', '(', 'E', ')', 'S', ' ', '=' | 0x80,
+    '#', ':', '(', 'E', 'L', 'Y', ')', ' ', '=', 'L', 'I', 'Y' | 0x80,
+    '#', ':', '(', 'E', 'M', 'E', 'N', 'T', ')', '=', 'M', 'E', 'H', 'N', 'T' | 0x80,
+    '(', 'E', 'F', 'U', 'L', ')', '=', 'F', 'U', 'H', 'L' | 0x80,
+    '(', 'E', 'E', ')', '=', 'I', 'Y', '4' | 0x80,
+    '(', 'E', 'A', 'R', 'N', ')', '=', 'E', 'R', '5', 'N' | 0x80,
+    ' ', '(', 'E', 'A', 'R', ')', '^', '=', 'E', 'R', '5' | 0x80,
+    '(', 'E', 'A', 'D', ')', '=', 'E', 'H', 'D' | 0x80,
+    '#', ':', '(', 'E', 'A', ')', ' ', '=', 'I', 'Y', 'A', 'X' | 0x80,
+    '(', 'E', 'A', ')', 'S', 'U', '=', 'E', 'H', '5' | 0x80,
+    '(', 'E', 'A', ')', '=', 'I', 'Y', '5' | 0x80,
+    '(', 'E', 'I', 'G', 'H', ')', '=', 'E', 'Y', '4' | 0x80,
+    '(', 'E', 'I', ')', '=', 'I', 'Y', '4' | 0x80,
+    ' ', '(', 'E', 'Y', 'E', ')', '=', 'A', 'Y', '4' | 0x80,
+    '(', 'E', 'Y', ')', '=', 'I', 'Y' | 0x80,
+    '(', 'E', 'U', ')', '=', 'Y', 'U', 'W', '5' | 0x80,
+    '(', 'E', 'Q', 'U', 'A', 'L', ')', '=', 'I', 'Y', '4', 'K', 'W', 'U', 'L' | 0x80,
+    '(', 'E', ')', '=', 'E', 'H' | 0x80,
 
-']','F'|0x80,
-' ','(','F',')',' ',                    '=','E','H','4','F'|0x80,
-'(','F','U','L',')',                    '=','F','U','H','L'|0x80,
-'(','F','R','I','E','N','D',')',        '=','F','R','E','H','5','N','D'|0x80,
-'(','F','A','T','H','E','R',')',        '=','F','A','A','4','D','H','E','R'|0x80,
-'(','F',')','F','='|0x80,
-'(','F',')',                            '=','F'|0x80,
+    ']', 'F' | 0x80,
+    ' ', '(', 'F', ')', ' ', '=', 'E', 'H', '4', 'F' | 0x80,
+    '(', 'F', 'U', 'L', ')', '=', 'F', 'U', 'H', 'L' | 0x80,
+    '(', 'F', 'R', 'I', 'E', 'N', 'D', ')', '=', 'F', 'R', 'E', 'H', '5', 'N', 'D' | 0x80,
+    '(', 'F', 'A', 'T', 'H', 'E', 'R', ')', '=', 'F', 'A', 'A', '4', 'D', 'H', 'E', 'R' | 0x80,
+    '(', 'F', ')', 'F', '=' | 0x80,
+    '(', 'F', ')', '=', 'F' | 0x80,
 
-']','G'|0x80,
-' ','(','G',')',' ',                    '=','J','I','Y','4'|0x80,
-'(','G','I','V',')',                    '=','G','I','H','5','V'|0x80,
-' ','(','G',')','I','^',                '=','G'|0x80,
-'(','G','E',')','T',                    '=','G','E','H','5'|0x80,
-'S','U','(','G','G','E','S',')',        '=','G','J','E','H','4','S'|0x80,
-'(','G','G',')',                        '=','G'|0x80,
-' ','B','#','(','G',')',                '=','G'|0x80,
-'(','G',')','+',                        '=','J'|0x80,
-'(','G','R','E','A','T',')',            '=','G','R','E','Y','4','T'|0x80,
-'(','G','O','N',')','E',                '=','G','A','O','5','N'|0x80,
-'#','(','G','H',')','='|0x80,
-' ','(','G','N',')',                    '=','N'|0x80,
-'(','G',')',                            '=','G'|0x80,
+    ']', 'G' | 0x80,
+    ' ', '(', 'G', ')', ' ', '=', 'J', 'I', 'Y', '4' | 0x80,
+    '(', 'G', 'I', 'V', ')', '=', 'G', 'I', 'H', '5', 'V' | 0x80,
+    ' ', '(', 'G', ')', 'I', '^', '=', 'G' | 0x80,
+    '(', 'G', 'E', ')', 'T', '=', 'G', 'E', 'H', '5' | 0x80,
+    'S', 'U', '(', 'G', 'G', 'E', 'S', ')', '=', 'G', 'J', 'E', 'H', '4', 'S' | 0x80,
+    '(', 'G', 'G', ')', '=', 'G' | 0x80,
+    ' ', 'B', '#', '(', 'G', ')', '=', 'G' | 0x80,
+    '(', 'G', ')', '+', '=', 'J' | 0x80,
+    '(', 'G', 'R', 'E', 'A', 'T', ')', '=', 'G', 'R', 'E', 'Y', '4', 'T' | 0x80,
+    '(', 'G', 'O', 'N', ')', 'E', '=', 'G', 'A', 'O', '5', 'N' | 0x80,
+    '#', '(', 'G', 'H', ')', '=' | 0x80,
+    ' ', '(', 'G', 'N', ')', '=', 'N' | 0x80,
+    '(', 'G', ')', '=', 'G' | 0x80,
 
-']','H'|0x80,
-' ','(','H',')',' ',                    '=','E','Y','4','C','H'|0x80,
-' ','(','H','A','V',')',                '=','/','H','A','E','6','V'|0x80,
-' ','(','H','E','R','E',')',            '=','/','H','I','Y','R'|0x80,
-' ','(','H','O','U','R',')',            '=','A','W','5','E','R'|0x80,
-'(','H','O','W',')',                    '=','/','H','A','W'|0x80,
-'(','H',')','#',                        '=','/','H'|0x80,
-'(','H',')','='|0x80,
+    ']', 'H' | 0x80,
+    ' ', '(', 'H', ')', ' ', '=', 'E', 'Y', '4', 'C', 'H' | 0x80,
+    ' ', '(', 'H', 'A', 'V', ')', '=', '/', 'H', 'A', 'E', '6', 'V' | 0x80,
+    ' ', '(', 'H', 'E', 'R', 'E', ')', '=', '/', 'H', 'I', 'Y', 'R' | 0x80,
+    ' ', '(', 'H', 'O', 'U', 'R', ')', '=', 'A', 'W', '5', 'E', 'R' | 0x80,
+    '(', 'H', 'O', 'W', ')', '=', '/', 'H', 'A', 'W' | 0x80,
+    '(', 'H', ')', '#', '=', '/', 'H' | 0x80,
+    '(', 'H', ')', '=' | 0x80,
 
-']','I'|0x80,
-' ','(','I','N',')',                    '=','I','H','N'|0x80,
-' ','(','I',')',' ',                    '=','A','Y','4'|0x80,
-'(','I',')',' ',                        '=','A','Y'|0x80,
-'(','I','N',')','D',                    '=','A','Y','5','N'|0x80,
-'S','E','M','(','I',')',                '=','I','Y'|0x80,
-' ','A','N','T','(','I',')',            '=','A','Y'|0x80,
-'(','I','E','R',')',                    '=','I','Y','E','R'|0x80,
-'#',':','R','(','I','E','D',')',' ',    '=','I','Y','D'|0x80,
-'(','I','E','D',')',' ',                '=','A','Y','5','D'|0x80,
-'(','I','E','N',')',                    '=','I','Y','E','H','N'|0x80,
-'(','I','E',')','T',                    '=','A','Y','4','E','H'|0x80,
-'(','I','\'',')',                        '=','A','Y','5'|0x80,
-' ',':','(','I',')','^','%',            '=','A','Y','5'|0x80,
-' ',':','(','I','E',')',' ',            '=','A','Y','4'|0x80,
-'(','I',')','%',                        '=','I','Y'|0x80,
-'(','I','E',')',                        '=','I','Y','4'|0x80,
-' ','(','I','D','E','A',')',            '=','A','Y','D','I','Y','5','A','H'|0x80,
-'(','I',')','^','+',':','#',            '=','I','H'|0x80,
-'(','I','R',')','#',                    '=','A','Y','R'|0x80,
-'(','I','Z',')','%',                    '=','A','Y','Z'|0x80,
-'(','I','S',')','%',                    '=','A','Y','Z'|0x80,
-'I','^','(','I',')','^','#',            '=','I','H'|0x80,
-'+','^','(','I',')','^','+',            '=','A','Y'|0x80,
-'#',':','^','(','I',')','^','+',        '=','I','H'|0x80,
-'(','I',')','^','+',                    '=','A','Y'|0x80,
-'(','I','R',')',                        '=','E','R'|0x80,
-'(','I','G','H',')',                    '=','A','Y','4'|0x80,
-'(','I','L','D',')',                    '=','A','Y','5','L','D'|0x80,
-' ','(','I','G','N',')',                '=','I','H','G','N'|0x80,
-'(','I','G','N',')',' ',                '=','A','Y','4','N'|0x80,
-'(','I','G','N',')','^',                '=','A','Y','4','N'|0x80,
-'(','I','G','N',')','%',                '=','A','Y','4','N'|0x80,
-'(','I','C','R','O',')',                '=','A','Y','4','K','R','O','H'|0x80,
-'(','I','Q','U','E',')',                '=','I','Y','4','K'|0x80,
-'(','I',')',                            '=','I','H'|0x80,
+    ']', 'I' | 0x80,
+    ' ', '(', 'I', 'N', ')', '=', 'I', 'H', 'N' | 0x80,
+    ' ', '(', 'I', ')', ' ', '=', 'A', 'Y', '4' | 0x80,
+    '(', 'I', ')', ' ', '=', 'A', 'Y' | 0x80,
+    '(', 'I', 'N', ')', 'D', '=', 'A', 'Y', '5', 'N' | 0x80,
+    'S', 'E', 'M', '(', 'I', ')', '=', 'I', 'Y' | 0x80,
+    ' ', 'A', 'N', 'T', '(', 'I', ')', '=', 'A', 'Y' | 0x80,
+    '(', 'I', 'E', 'R', ')', '=', 'I', 'Y', 'E', 'R' | 0x80,
+    '#', ':', 'R', '(', 'I', 'E', 'D', ')', ' ', '=', 'I', 'Y', 'D' | 0x80,
+    '(', 'I', 'E', 'D', ')', ' ', '=', 'A', 'Y', '5', 'D' | 0x80,
+    '(', 'I', 'E', 'N', ')', '=', 'I', 'Y', 'E', 'H', 'N' | 0x80,
+    '(', 'I', 'E', ')', 'T', '=', 'A', 'Y', '4', 'E', 'H' | 0x80,
+    '(', 'I', '\'', ')', '=', 'A', 'Y', '5' | 0x80,
+    ' ', ':', '(', 'I', ')', '^', '%', '=', 'A', 'Y', '5' | 0x80,
+    ' ', ':', '(', 'I', 'E', ')', ' ', '=', 'A', 'Y', '4' | 0x80,
+    '(', 'I', ')', '%', '=', 'I', 'Y' | 0x80,
+    '(', 'I', 'E', ')', '=', 'I', 'Y', '4' | 0x80,
+    ' ', '(', 'I', 'D', 'E', 'A', ')', '=', 'A', 'Y', 'D', 'I', 'Y', '5', 'A', 'H' | 0x80,
+    '(', 'I', ')', '^', '+', ':', '#', '=', 'I', 'H' | 0x80,
+    '(', 'I', 'R', ')', '#', '=', 'A', 'Y', 'R' | 0x80,
+    '(', 'I', 'Z', ')', '%', '=', 'A', 'Y', 'Z' | 0x80,
+    '(', 'I', 'S', ')', '%', '=', 'A', 'Y', 'Z' | 0x80,
+    'I', '^', '(', 'I', ')', '^', '#', '=', 'I', 'H' | 0x80,
+    '+', '^', '(', 'I', ')', '^', '+', '=', 'A', 'Y' | 0x80,
+    '#', ':', '^', '(', 'I', ')', '^', '+', '=', 'I', 'H' | 0x80,
+    '(', 'I', ')', '^', '+', '=', 'A', 'Y' | 0x80,
+    '(', 'I', 'R', ')', '=', 'E', 'R' | 0x80,
+    '(', 'I', 'G', 'H', ')', '=', 'A', 'Y', '4' | 0x80,
+    '(', 'I', 'L', 'D', ')', '=', 'A', 'Y', '5', 'L', 'D' | 0x80,
+    ' ', '(', 'I', 'G', 'N', ')', '=', 'I', 'H', 'G', 'N' | 0x80,
+    '(', 'I', 'G', 'N', ')', ' ', '=', 'A', 'Y', '4', 'N' | 0x80,
+    '(', 'I', 'G', 'N', ')', '^', '=', 'A', 'Y', '4', 'N' | 0x80,
+    '(', 'I', 'G', 'N', ')', '%', '=', 'A', 'Y', '4', 'N' | 0x80,
+    '(', 'I', 'C', 'R', 'O', ')', '=', 'A', 'Y', '4', 'K', 'R', 'O', 'H' | 0x80,
+    '(', 'I', 'Q', 'U', 'E', ')', '=', 'I', 'Y', '4', 'K' | 0x80,
+    '(', 'I', ')', '=', 'I', 'H' | 0x80,
 
-']','J'|0x80,
-' ','(','J',')',' ',                    '=','J','E','Y','4'|0x80,
-'(','J',')',                            '=','J'|0x80,
+    ']', 'J' | 0x80,
+    ' ', '(', 'J', ')', ' ', '=', 'J', 'E', 'Y', '4' | 0x80,
+    '(', 'J', ')', '=', 'J' | 0x80,
 
-']','K'|0x80,
-' ','(','K',')',' ',                    '=','K','E','Y','4'|0x80,
-' ','(','K',')','N','='|0x80,
-'(','K',')',                            '=','K'|0x80,
+    ']', 'K' | 0x80,
+    ' ', '(', 'K', ')', ' ', '=', 'K', 'E', 'Y', '4' | 0x80,
+    ' ', '(', 'K', ')', 'N', '=' | 0x80,
+    '(', 'K', ')', '=', 'K' | 0x80,
 
-']','L'|0x80,
-' ','(','L',')',' ',                    '=','E','H','4','L'|0x80,
-'(','L','O',')','C','#',                '=','L','O','W'|0x80,
-'L','(','L',')','='|0x80,
-'#',':','^','(','L',')','%',            '=','U','L'|0x80,
-'(','L','E','A','D',')',                '=','L','I','Y','D'|0x80,
-' ','(','L','A','U','G','H',')',        '=','L','A','E','4','F'|0x80,
-'(','L',')',                            '=','L'|0x80,
+    ']', 'L' | 0x80,
+    ' ', '(', 'L', ')', ' ', '=', 'E', 'H', '4', 'L' | 0x80,
+    '(', 'L', 'O', ')', 'C', '#', '=', 'L', 'O', 'W' | 0x80,
+    'L', '(', 'L', ')', '=' | 0x80,
+    '#', ':', '^', '(', 'L', ')', '%', '=', 'U', 'L' | 0x80,
+    '(', 'L', 'E', 'A', 'D', ')', '=', 'L', 'I', 'Y', 'D' | 0x80,
+    ' ', '(', 'L', 'A', 'U', 'G', 'H', ')', '=', 'L', 'A', 'E', '4', 'F' | 0x80,
+    '(', 'L', ')', '=', 'L' | 0x80,
 
-']','M'|0x80,
-' ','(','M',')',' ',                    '=','E','H','4','M'|0x80,
-' ','(','M','R','.',')',' ',            '=','M','I','H','4','S','T','E','R'|0x80,
-' ','(','M','S','.',')',                '=','M','I','H','5','Z'|0x80,
-' ','(','M','R','S','.',')',' ',        '=','M','I','H','4','S','I','X','Z'|0x80,
-'(','M','O','V',')',                    '=','M','U','W','4','V'|0x80,
-'(','M','A','C','H','I','N',')',        '=','M','A','H','S','H','I','Y','5','N'|0x80,
-'M','(','M',')','='|0x80,
-'(','M',')',                            '=','M'|0x80,
+    ']', 'M' | 0x80,
+    ' ', '(', 'M', ')', ' ', '=', 'E', 'H', '4', 'M' | 0x80,
+    ' ', '(', 'M', 'R', '.', ')', ' ', '=', 'M', 'I', 'H', '4', 'S', 'T', 'E', 'R' | 0x80,
+    ' ', '(', 'M', 'S', '.', ')', '=', 'M', 'I', 'H', '5', 'Z' | 0x80,
+    ' ', '(', 'M', 'R', 'S', '.', ')', ' ', '=', 'M', 'I', 'H', '4', 'S', 'I', 'X', 'Z' | 0x80,
+    '(', 'M', 'O', 'V', ')', '=', 'M', 'U', 'W', '4', 'V' | 0x80,
+    '(', 'M', 'A', 'C', 'H', 'I', 'N', ')', '=', 'M', 'A', 'H', 'S', 'H', 'I', 'Y', '5', 'N' | 0x80,
+    'M', '(', 'M', ')', '=' | 0x80,
+    '(', 'M', ')', '=', 'M' | 0x80,
 
-']','N'|0x80,
-' ','(','N',')',' ',                    '=','E','H','4','N'|0x80,
-'E','(','N','G',')','+',                '=','N','J'|0x80,
-'(','N','G',')','R',                    '=','N','X','G'|0x80,
-'(','N','G',')','#',                    '=','N','X','G'|0x80,
-'(','N','G','L',')','%',                '=','N','X','G','U','L'|0x80,
-'(','N','G',')',                        '=','N','X'|0x80,
-'(','N','K',')',                        '=','N','X','K'|0x80,
-' ','(','N','O','W',')',' ',            '=','N','A','W','4'|0x80,
-'N','(','N',')','='|0x80,
-'(','N','O','N',')','E',                '=','N','A','H','4','N'|0x80,
-'(','N',')',                            '=','N'|0x80,
+    ']', 'N' | 0x80,
+    ' ', '(', 'N', ')', ' ', '=', 'E', 'H', '4', 'N' | 0x80,
+    'E', '(', 'N', 'G', ')', '+', '=', 'N', 'J' | 0x80,
+    '(', 'N', 'G', ')', 'R', '=', 'N', 'X', 'G' | 0x80,
+    '(', 'N', 'G', ')', '#', '=', 'N', 'X', 'G' | 0x80,
+    '(', 'N', 'G', 'L', ')', '%', '=', 'N', 'X', 'G', 'U', 'L' | 0x80,
+    '(', 'N', 'G', ')', '=', 'N', 'X' | 0x80,
+    '(', 'N', 'K', ')', '=', 'N', 'X', 'K' | 0x80,
+    ' ', '(', 'N', 'O', 'W', ')', ' ', '=', 'N', 'A', 'W', '4' | 0x80,
+    'N', '(', 'N', ')', '=' | 0x80,
+    '(', 'N', 'O', 'N', ')', 'E', '=', 'N', 'A', 'H', '4', 'N' | 0x80,
+    '(', 'N', ')', '=', 'N' | 0x80,
 
-']','O'|0x80,
-' ','(','O',')',' ',                    '=','O','H','4','W'|0x80,
-'(','O','F',')',' ',                    '=','A','H','V'|0x80,
-' ','(','O','H',')',' ',                '=','O','W','5'|0x80,
-'(','O','R','O','U','G','H',')',        '=','E','R','4','O','W'|0x80,
-'#',':','(','O','R',')',' ',            '=','E','R'|0x80,
-'#',':','(','O','R','S',')',' ',        '=','E','R','Z'|0x80,
-'(','O','R',')',                        '=','A','O','R'|0x80,
-' ','(','O','N','E',')',                '=','W','A','H','N'|0x80,
-'#','(','O','N','E',')',' ',            '=','W','A','H','N'|0x80,
-'(','O','W',')',                        '=','O','W'|0x80,
-' ','(','O','V','E','R',')',            '=','O','W','5','V','E','R'|0x80,
-'P','R','(','O',')','V',                '=','U','W','4'|0x80,
-'(','O','V',')',                        '=','A','H','4','V'|0x80,
-'(','O',')','^','%',                    '=','O','W','5'|0x80,
-'(','O',')','^','E','N',                '=','O','W'|0x80,
-'(','O',')','^','I','#',                '=','O','W','5'|0x80,
-'(','O','L',')','D',                    '=','O','W','4','L'|0x80,
-'(','O','U','G','H','T',')',            '=','A','O','5','T'|0x80,
-'(','O','U','G','H',')',                '=','A','H','5','F'|0x80,
-' ','(','O','U',')',                    '=','A','W'|0x80,
-'H','(','O','U',')','S','#',            '=','A','W','4'|0x80,
-'(','O','U','S',')',                    '=','A','X','S'|0x80,
-'(','O','U','R',')',                    '=','O','H','R'|0x80,
-'(','O','U','L','D',')',                '=','U','H','5','D'|0x80,
-'(','O','U',')','^','L',                '=','A','H','5'|0x80,
-'(','O','U','P',')',                    '=','U','W','5','P'|0x80,
-'(','O','U',')',                        '=','A','W'|0x80,
-'(','O','Y',')',                        '=','O','Y'|0x80,
-'(','O','I','N','G',')',                '=','O','W','4','I','H','N','X'|0x80,
-'(','O','I',')',                        '=','O','Y','5'|0x80,
-'(','O','O','R',')',                    '=','O','H','5','R'|0x80,
-'(','O','O','K',')',                    '=','U','H','5','K'|0x80,
-'F','(','O','O','D',')',                '=','U','W','5','D'|0x80,
-'L','(','O','O','D',')',                '=','A','H','5','D'|0x80,
-'M','(','O','O','D',')',                '=','U','W','5','D'|0x80,
-'(','O','O','D',')',                    '=','U','H','5','D'|0x80,
-'F','(','O','O','T',')',                '=','U','H','5','T'|0x80,
-'(','O','O',')',                        '=','U','W','5'|0x80,
-'(','O','\'',')',                        '=','O','H'|0x80,
-'(','O',')','E',                        '=','O','W'|0x80,
-'(','O',')',' ',                        '=','O','W'|0x80,
-'(','O','A',')',                        '=','O','W','4'|0x80,
-' ','(','O','N','L','Y',')',            '=','O','W','4','N','L','I','Y'|0x80,
-' ','(','O','N','C','E',')',            '=','W','A','H','4','N','S'|0x80,
-'(','O','N','\'','T',')',                '=','O','W','4','N','T'|0x80,
-'C','(','O',')','N',                    '=','A','A'|0x80,
-'(','O',')','N','G',                    '=','A','O'|0x80,
-' ',':','^','(','O',')','N',            '=','A','H'|0x80,
-'I','(','O','N',')',                    '=','U','N'|0x80,
-'#',':','(','O','N',')',                '=','U','N'|0x80,
-'#','^','(','O','N',')',                '=','U','N'|0x80,
-'(','O',')','S','T',                    '=','O','W'|0x80,
-'(','O','F',')','^',                    '=','A','O','4','F'|0x80,
-'(','O','T','H','E','R',')',            '=','A','H','5','D','H','E','R'|0x80,
-'R','(','O',')','B',                    '=','R','A','A'|0x80,
-'^','R','(','O',')',':','#',            '=','O','W','5'|0x80,
-'(','O','S','S',')',' ',                '=','A','O','5','S'|0x80,
-'#',':','^','(','O','M',')',            '=','A','H','M'|0x80,
-'(','O',')',                            '=','A','A'|0x80,
+    ']', 'O' | 0x80,
+    ' ', '(', 'O', ')', ' ', '=', 'O', 'H', '4', 'W' | 0x80,
+    '(', 'O', 'F', ')', ' ', '=', 'A', 'H', 'V' | 0x80,
+    ' ', '(', 'O', 'H', ')', ' ', '=', 'O', 'W', '5' | 0x80,
+    '(', 'O', 'R', 'O', 'U', 'G', 'H', ')', '=', 'E', 'R', '4', 'O', 'W' | 0x80,
+    '#', ':', '(', 'O', 'R', ')', ' ', '=', 'E', 'R' | 0x80,
+    '#', ':', '(', 'O', 'R', 'S', ')', ' ', '=', 'E', 'R', 'Z' | 0x80,
+    '(', 'O', 'R', ')', '=', 'A', 'O', 'R' | 0x80,
+    ' ', '(', 'O', 'N', 'E', ')', '=', 'W', 'A', 'H', 'N' | 0x80,
+    '#', '(', 'O', 'N', 'E', ')', ' ', '=', 'W', 'A', 'H', 'N' | 0x80,
+    '(', 'O', 'W', ')', '=', 'O', 'W' | 0x80,
+    ' ', '(', 'O', 'V', 'E', 'R', ')', '=', 'O', 'W', '5', 'V', 'E', 'R' | 0x80,
+    'P', 'R', '(', 'O', ')', 'V', '=', 'U', 'W', '4' | 0x80,
+    '(', 'O', 'V', ')', '=', 'A', 'H', '4', 'V' | 0x80,
+    '(', 'O', ')', '^', '%', '=', 'O', 'W', '5' | 0x80,
+    '(', 'O', ')', '^', 'E', 'N', '=', 'O', 'W' | 0x80,
+    '(', 'O', ')', '^', 'I', '#', '=', 'O', 'W', '5' | 0x80,
+    '(', 'O', 'L', ')', 'D', '=', 'O', 'W', '4', 'L' | 0x80,
+    '(', 'O', 'U', 'G', 'H', 'T', ')', '=', 'A', 'O', '5', 'T' | 0x80,
+    '(', 'O', 'U', 'G', 'H', ')', '=', 'A', 'H', '5', 'F' | 0x80,
+    ' ', '(', 'O', 'U', ')', '=', 'A', 'W' | 0x80,
+    'H', '(', 'O', 'U', ')', 'S', '#', '=', 'A', 'W', '4' | 0x80,
+    '(', 'O', 'U', 'S', ')', '=', 'A', 'X', 'S' | 0x80,
+    '(', 'O', 'U', 'R', ')', '=', 'O', 'H', 'R' | 0x80,
+    '(', 'O', 'U', 'L', 'D', ')', '=', 'U', 'H', '5', 'D' | 0x80,
+    '(', 'O', 'U', ')', '^', 'L', '=', 'A', 'H', '5' | 0x80,
+    '(', 'O', 'U', 'P', ')', '=', 'U', 'W', '5', 'P' | 0x80,
+    '(', 'O', 'U', ')', '=', 'A', 'W' | 0x80,
+    '(', 'O', 'Y', ')', '=', 'O', 'Y' | 0x80,
+    '(', 'O', 'I', 'N', 'G', ')', '=', 'O', 'W', '4', 'I', 'H', 'N', 'X' | 0x80,
+    '(', 'O', 'I', ')', '=', 'O', 'Y', '5' | 0x80,
+    '(', 'O', 'O', 'R', ')', '=', 'O', 'H', '5', 'R' | 0x80,
+    '(', 'O', 'O', 'K', ')', '=', 'U', 'H', '5', 'K' | 0x80,
+    'F', '(', 'O', 'O', 'D', ')', '=', 'U', 'W', '5', 'D' | 0x80,
+    'L', '(', 'O', 'O', 'D', ')', '=', 'A', 'H', '5', 'D' | 0x80,
+    'M', '(', 'O', 'O', 'D', ')', '=', 'U', 'W', '5', 'D' | 0x80,
+    '(', 'O', 'O', 'D', ')', '=', 'U', 'H', '5', 'D' | 0x80,
+    'F', '(', 'O', 'O', 'T', ')', '=', 'U', 'H', '5', 'T' | 0x80,
+    '(', 'O', 'O', ')', '=', 'U', 'W', '5' | 0x80,
+    '(', 'O', '\'', ')', '=', 'O', 'H' | 0x80,
+    '(', 'O', ')', 'E', '=', 'O', 'W' | 0x80,
+    '(', 'O', ')', ' ', '=', 'O', 'W' | 0x80,
+    '(', 'O', 'A', ')', '=', 'O', 'W', '4' | 0x80,
+    ' ', '(', 'O', 'N', 'L', 'Y', ')', '=', 'O', 'W', '4', 'N', 'L', 'I', 'Y' | 0x80,
+    ' ', '(', 'O', 'N', 'C', 'E', ')', '=', 'W', 'A', 'H', '4', 'N', 'S' | 0x80,
+    '(', 'O', 'N', '\'', 'T', ')', '=', 'O', 'W', '4', 'N', 'T' | 0x80,
+    'C', '(', 'O', ')', 'N', '=', 'A', 'A' | 0x80,
+    '(', 'O', ')', 'N', 'G', '=', 'A', 'O' | 0x80,
+    ' ', ':', '^', '(', 'O', ')', 'N', '=', 'A', 'H' | 0x80,
+    'I', '(', 'O', 'N', ')', '=', 'U', 'N' | 0x80,
+    '#', ':', '(', 'O', 'N', ')', '=', 'U', 'N' | 0x80,
+    '#', '^', '(', 'O', 'N', ')', '=', 'U', 'N' | 0x80,
+    '(', 'O', ')', 'S', 'T', '=', 'O', 'W' | 0x80,
+    '(', 'O', 'F', ')', '^', '=', 'A', 'O', '4', 'F' | 0x80,
+    '(', 'O', 'T', 'H', 'E', 'R', ')', '=', 'A', 'H', '5', 'D', 'H', 'E', 'R' | 0x80,
+    'R', '(', 'O', ')', 'B', '=', 'R', 'A', 'A' | 0x80,
+    '^', 'R', '(', 'O', ')', ':', '#', '=', 'O', 'W', '5' | 0x80,
+    '(', 'O', 'S', 'S', ')', ' ', '=', 'A', 'O', '5', 'S' | 0x80,
+    '#', ':', '^', '(', 'O', 'M', ')', '=', 'A', 'H', 'M' | 0x80,
+    '(', 'O', ')', '=', 'A', 'A' | 0x80,
 
-']','P'|0x80,
-' ','(','P',')',' ',                    '=','P','I','Y','4'|0x80,
-'(','P','H',')',                        '=','F'|0x80,
-'(','P','E','O','P','L',')',            '=','P','I','Y','5','P','U','L'|0x80,
-'(','P','O','W',')',                    '=','P','A','W','4'|0x80,
-'(','P','U','T',')',' ',                '=','P','U','H','T'|0x80,
-'(','P',')','P','='|0x80,
-'(','P',')','S','='|0x80,
-'(','P',')','N','='|0x80,
-'(','P','R','O','F','.',')',            '=','P','R','O','H','F','E','H','4','S','E','R'|0x80,
-'(','P',')',                            '=','P'|0x80,
+    ']', 'P' | 0x80,
+    ' ', '(', 'P', ')', ' ', '=', 'P', 'I', 'Y', '4' | 0x80,
+    '(', 'P', 'H', ')', '=', 'F' | 0x80,
+    '(', 'P', 'E', 'O', 'P', 'L', ')', '=', 'P', 'I', 'Y', '5', 'P', 'U', 'L' | 0x80,
+    '(', 'P', 'O', 'W', ')', '=', 'P', 'A', 'W', '4' | 0x80,
+    '(', 'P', 'U', 'T', ')', ' ', '=', 'P', 'U', 'H', 'T' | 0x80,
+    '(', 'P', ')', 'P', '=' | 0x80,
+    '(', 'P', ')', 'S', '=' | 0x80,
+    '(', 'P', ')', 'N', '=' | 0x80,
+    '(', 'P', 'R', 'O', 'F', '.', ')', '=', 'P', 'R', 'O', 'H', 'F', 'E', 'H', '4', 'S', 'E', 'R' | 0x80,
+    '(', 'P', ')', '=', 'P' | 0x80,
 
-']','Q'|0x80,
-' ','(','Q',')',' ',                    '=','K','Y','U','W','4'|0x80,
-'(','Q','U','A','R',')',                '=','K','W','O','H','5','R'|0x80,
-'(','Q','U',')',                        '=','K','W'|0x80,
-'(','Q',')',                            '=','K'|0x80,
-']','R'|0x80,
-' ','(','R',')',' ',                    '=','A','A','5','R'|0x80,
-' ','(','R','E',')','^','#',            '=','R','I','Y'|0x80,
-'(','R',')','R','='|0x80,
-'(','R',')',                            '=','R'|0x80,
+    ']', 'Q' | 0x80,
+    ' ', '(', 'Q', ')', ' ', '=', 'K', 'Y', 'U', 'W', '4' | 0x80,
+    '(', 'Q', 'U', 'A', 'R', ')', '=', 'K', 'W', 'O', 'H', '5', 'R' | 0x80,
+    '(', 'Q', 'U', ')', '=', 'K', 'W' | 0x80,
+    '(', 'Q', ')', '=', 'K' | 0x80,
+    ']', 'R' | 0x80,
+    ' ', '(', 'R', ')', ' ', '=', 'A', 'A', '5', 'R' | 0x80,
+    ' ', '(', 'R', 'E', ')', '^', '#', '=', 'R', 'I', 'Y' | 0x80,
+    '(', 'R', ')', 'R', '=' | 0x80,
+    '(', 'R', ')', '=', 'R' | 0x80,
 
-']','S'|0x80,
-' ','(','S',')',' ',                    '=','E','H','4','S'|0x80,
-'(','S','H',')',                        '=','S','H'|0x80,
-'#','(','S','I','O','N',')',            '=','Z','H','U','N'|0x80,
-'(','S','O','M','E',')',                '=','S','A','H','M'|0x80,
-'#','(','S','U','R',')','#',            '=','Z','H','E','R'|0x80,
-'(','S','U','R',')','#',                '=','S','H','E','R'|0x80,
-'#','(','S','U',')','#',                '=','Z','H','U','W'|0x80,
-'#','(','S','S','U',')','#',            '=','S','H','U','W'|0x80,
-'#','(','S','E','D',')',                '=','Z','D'|0x80,
-'#','(','S',')','#',                    '=','Z'|0x80,
-'(','S','A','I','D',')',                '=','S','E','H','D'|0x80,
-'^','(','S','I','O','N',')',            '=','S','H','U','N'|0x80,
-'(','S',')','S','='|0x80,
-'.','(','S',')',' ',                    '=','Z'|0x80,
-'#',':','.','E','(','S',')',' ',        '=','Z'|0x80,
-'#',':','^','#','(','S',')',' ',        '=','S'|0x80,
-'U','(','S',')',' ',                    '=','S'|0x80,
-' ',':','#','(','S',')',' ',            '=','Z'|0x80,
-'#','#','(','S',')',' ',                '=','Z'|0x80,
-' ','(','S','C','H',')',                '=','S','K'|0x80,
-'(','S',')','C','+','='|0x80,
-'#','(','S','M',')',                    '=','Z','U','M'|0x80,
-'#','(','S','N',')','\'',                '=','Z','U','M'|0x80,
-'(','S','T','L','E',')',                '=','S','U','L'|0x80,
-'(','S',')',                            '=','S'|0x80,
+    ']', 'S' | 0x80,
+    ' ', '(', 'S', ')', ' ', '=', 'E', 'H', '4', 'S' | 0x80,
+    '(', 'S', 'H', ')', '=', 'S', 'H' | 0x80,
+    '#', '(', 'S', 'I', 'O', 'N', ')', '=', 'Z', 'H', 'U', 'N' | 0x80,
+    '(', 'S', 'O', 'M', 'E', ')', '=', 'S', 'A', 'H', 'M' | 0x80,
+    '#', '(', 'S', 'U', 'R', ')', '#', '=', 'Z', 'H', 'E', 'R' | 0x80,
+    '(', 'S', 'U', 'R', ')', '#', '=', 'S', 'H', 'E', 'R' | 0x80,
+    '#', '(', 'S', 'U', ')', '#', '=', 'Z', 'H', 'U', 'W' | 0x80,
+    '#', '(', 'S', 'S', 'U', ')', '#', '=', 'S', 'H', 'U', 'W' | 0x80,
+    '#', '(', 'S', 'E', 'D', ')', '=', 'Z', 'D' | 0x80,
+    '#', '(', 'S', ')', '#', '=', 'Z' | 0x80,
+    '(', 'S', 'A', 'I', 'D', ')', '=', 'S', 'E', 'H', 'D' | 0x80,
+    '^', '(', 'S', 'I', 'O', 'N', ')', '=', 'S', 'H', 'U', 'N' | 0x80,
+    '(', 'S', ')', 'S', '=' | 0x80,
+    '.', '(', 'S', ')', ' ', '=', 'Z' | 0x80,
+    '#', ':', '.', 'E', '(', 'S', ')', ' ', '=', 'Z' | 0x80,
+    '#', ':', '^', '#', '(', 'S', ')', ' ', '=', 'S' | 0x80,
+    'U', '(', 'S', ')', ' ', '=', 'S' | 0x80,
+    ' ', ':', '#', '(', 'S', ')', ' ', '=', 'Z' | 0x80,
+    '#', '#', '(', 'S', ')', ' ', '=', 'Z' | 0x80,
+    ' ', '(', 'S', 'C', 'H', ')', '=', 'S', 'K' | 0x80,
+    '(', 'S', ')', 'C', '+', '=' | 0x80,
+    '#', '(', 'S', 'M', ')', '=', 'Z', 'U', 'M' | 0x80,
+    '#', '(', 'S', 'N', ')', '\'', '=', 'Z', 'U', 'M' | 0x80,
+    '(', 'S', 'T', 'L', 'E', ')', '=', 'S', 'U', 'L' | 0x80,
+    '(', 'S', ')', '=', 'S' | 0x80,
 
-']','T'|0x80,
-' ','(','T',')',' ',                    '=','T','I','Y','4'|0x80,
-' ','(','T','H','E',')',' ','#',        '=','D','H','I','Y'|0x80,
-' ','(','T','H','E',')',' ',            '=','D','H','A','X'|0x80,
-'(','T','O',')',' ',                    '=','T','U','X'|0x80,
-' ','(','T','H','A','T',')',            '=','D','H','A','E','T'|0x80,
-' ','(','T','H','I','S',')',' ',        '=','D','H','I','H','S'|0x80,
-' ','(','T','H','E','Y',')',            '=','D','H','E','Y'|0x80,
-' ','(','T','H','E','R','E',')',        '=','D','H','E','H','R'|0x80,
-'(','T','H','E','R',')',                '=','D','H','E','R'|0x80,
-'(','T','H','E','I','R',')',            '=','D','H','E','H','R'|0x80,
-' ','(','T','H','A','N',')',' ',        '=','D','H','A','E','N'|0x80,
-' ','(','T','H','E','M',')',' ',        '=','D','H','A','E','N'|0x80,
-'(','T','H','E','S','E',')',' ',        '=','D','H','I','Y','Z'|0x80,
-' ','(','T','H','E','N',')',            '=','D','H','E','H','N'|0x80,
-'(','T','H','R','O','U','G','H',')',    '=','T','H','R','U','W','4'|0x80,
-'(','T','H','O','S','E',')',            '=','D','H','O','H','Z'|0x80,
-'(','T','H','O','U','G','H',')',' ',    '=','D','H','O','W'|0x80,
-'(','T','O','D','A','Y',')',            '=','T','U','X','D','E','Y'|0x80,
-'(','T','O','M','O',')','R','R','O','W','=','T','U','M','A','A','5'|0x80,
-'(','T','O',')','T','A','L',            '=','T','O','W','5'|0x80,
-' ','(','T','H','U','S',')',            '=','D','H','A','H','4','S'|0x80,
-'(','T','H',')',                        '=','T','H'|0x80,
-'#',':','(','T','E','D',')',            '=','T','I','X','D'|0x80,
-'S','(','T','I',')','#','N',            '=','C','H'|0x80,
-'(','T','I',')','O',                    '=','S','H'|0x80,
-'(','T','I',')','A',                    '=','S','H'|0x80,
-'(','T','I','E','N',')',                '=','S','H','U','N'|0x80,
-'(','T','U','R',')','#',                '=','C','H','E','R'|0x80,
-'(','T','U',')','A',                    '=','C','H','U','W'|0x80,
-' ','(','T','W','O',')',                '=','T','U','W'|0x80,
-'&','(','T',')','E','N',' ','='|0x80,
-'(','T',')',                            '=','T'|0x80,
+    ']', 'T' | 0x80,
+    ' ', '(', 'T', ')', ' ', '=', 'T', 'I', 'Y', '4' | 0x80,
+    ' ', '(', 'T', 'H', 'E', ')', ' ', '#', '=', 'D', 'H', 'I', 'Y' | 0x80,
+    ' ', '(', 'T', 'H', 'E', ')', ' ', '=', 'D', 'H', 'A', 'X' | 0x80,
+    '(', 'T', 'O', ')', ' ', '=', 'T', 'U', 'X' | 0x80,
+    ' ', '(', 'T', 'H', 'A', 'T', ')', '=', 'D', 'H', 'A', 'E', 'T' | 0x80,
+    ' ', '(', 'T', 'H', 'I', 'S', ')', ' ', '=', 'D', 'H', 'I', 'H', 'S' | 0x80,
+    ' ', '(', 'T', 'H', 'E', 'Y', ')', '=', 'D', 'H', 'E', 'Y' | 0x80,
+    ' ', '(', 'T', 'H', 'E', 'R', 'E', ')', '=', 'D', 'H', 'E', 'H', 'R' | 0x80,
+    '(', 'T', 'H', 'E', 'R', ')', '=', 'D', 'H', 'E', 'R' | 0x80,
+    '(', 'T', 'H', 'E', 'I', 'R', ')', '=', 'D', 'H', 'E', 'H', 'R' | 0x80,
+    ' ', '(', 'T', 'H', 'A', 'N', ')', ' ', '=', 'D', 'H', 'A', 'E', 'N' | 0x80,
+    ' ', '(', 'T', 'H', 'E', 'M', ')', ' ', '=', 'D', 'H', 'A', 'E', 'N' | 0x80,
+    '(', 'T', 'H', 'E', 'S', 'E', ')', ' ', '=', 'D', 'H', 'I', 'Y', 'Z' | 0x80,
+    ' ', '(', 'T', 'H', 'E', 'N', ')', '=', 'D', 'H', 'E', 'H', 'N' | 0x80,
+    '(', 'T', 'H', 'R', 'O', 'U', 'G', 'H', ')', '=', 'T', 'H', 'R', 'U', 'W', '4' | 0x80,
+    '(', 'T', 'H', 'O', 'S', 'E', ')', '=', 'D', 'H', 'O', 'H', 'Z' | 0x80,
+    '(', 'T', 'H', 'O', 'U', 'G', 'H', ')', ' ', '=', 'D', 'H', 'O', 'W' | 0x80,
+    '(', 'T', 'O', 'D', 'A', 'Y', ')', '=', 'T', 'U', 'X', 'D', 'E', 'Y' | 0x80,
+    '(', 'T', 'O', 'M', 'O', ')', 'R', 'R', 'O', 'W', '=', 'T', 'U', 'M', 'A', 'A', '5' | 0x80,
+    '(', 'T', 'O', ')', 'T', 'A', 'L', '=', 'T', 'O', 'W', '5' | 0x80,
+    ' ', '(', 'T', 'H', 'U', 'S', ')', '=', 'D', 'H', 'A', 'H', '4', 'S' | 0x80,
+    '(', 'T', 'H', ')', '=', 'T', 'H' | 0x80,
+    '#', ':', '(', 'T', 'E', 'D', ')', '=', 'T', 'I', 'X', 'D' | 0x80,
+    'S', '(', 'T', 'I', ')', '#', 'N', '=', 'C', 'H' | 0x80,
+    '(', 'T', 'I', ')', 'O', '=', 'S', 'H' | 0x80,
+    '(', 'T', 'I', ')', 'A', '=', 'S', 'H' | 0x80,
+    '(', 'T', 'I', 'E', 'N', ')', '=', 'S', 'H', 'U', 'N' | 0x80,
+    '(', 'T', 'U', 'R', ')', '#', '=', 'C', 'H', 'E', 'R' | 0x80,
+    '(', 'T', 'U', ')', 'A', '=', 'C', 'H', 'U', 'W' | 0x80,
+    ' ', '(', 'T', 'W', 'O', ')', '=', 'T', 'U', 'W' | 0x80,
+    '&', '(', 'T', ')', 'E', 'N', ' ', '=' | 0x80,
+    '(', 'T', ')', '=', 'T' | 0x80,
 
-']','U'|0x80,
-' ','(','U',')',' ',                    '=','Y','U','W','4'|0x80,
-' ','(','U','N',')','I',                '=','Y','U','W','N'|0x80,
-' ','(','U','N',')',                    '=','A','H','N'|0x80,
-' ','(','U','P','O','N',')',            '=','A','X','P','A','O','N'|0x80,
-'@','(','U','R',')','#',                '=','U','H','4','R'|0x80,
-'(','U','R',')','#',                    '=','Y','U','H','4','R'|0x80,
-'(','U','R',')',                        '=','E','R'|0x80,
-'(','U',')','^',' ',                    '=','A','H'|0x80,
-'(','U',')','^','^',                    '=','A','H','5'|0x80,
-'(','U','Y',')',                        '=','A','Y','5'|0x80,
-' ','G','(','U',')','#','='|0x80,
-'G','(','U',')','%','='|0x80,
-'G','(','U',')','#',                    '=','W'|0x80,
-'#','N','(','U',')',                    '=','Y','U','W'|0x80,
-'@','(','U',')',                        '=','U','W'|0x80,
-'(','U',')',                            '=','Y','U','W'|0x80,
+    ']', 'U' | 0x80,
+    ' ', '(', 'U', ')', ' ', '=', 'Y', 'U', 'W', '4' | 0x80,
+    ' ', '(', 'U', 'N', ')', 'I', '=', 'Y', 'U', 'W', 'N' | 0x80,
+    ' ', '(', 'U', 'N', ')', '=', 'A', 'H', 'N' | 0x80,
+    ' ', '(', 'U', 'P', 'O', 'N', ')', '=', 'A', 'X', 'P', 'A', 'O', 'N' | 0x80,
+    '@', '(', 'U', 'R', ')', '#', '=', 'U', 'H', '4', 'R' | 0x80,
+    '(', 'U', 'R', ')', '#', '=', 'Y', 'U', 'H', '4', 'R' | 0x80,
+    '(', 'U', 'R', ')', '=', 'E', 'R' | 0x80,
+    '(', 'U', ')', '^', ' ', '=', 'A', 'H' | 0x80,
+    '(', 'U', ')', '^', '^', '=', 'A', 'H', '5' | 0x80,
+    '(', 'U', 'Y', ')', '=', 'A', 'Y', '5' | 0x80,
+    ' ', 'G', '(', 'U', ')', '#', '=' | 0x80,
+    'G', '(', 'U', ')', '%', '=' | 0x80,
+    'G', '(', 'U', ')', '#', '=', 'W' | 0x80,
+    '#', 'N', '(', 'U', ')', '=', 'Y', 'U', 'W' | 0x80,
+    '@', '(', 'U', ')', '=', 'U', 'W' | 0x80,
+    '(', 'U', ')', '=', 'Y', 'U', 'W' | 0x80,
 
-']','V'|0x80,
-' ','(','V',')',' ',                    '=','V','I','Y','4'|0x80,
-'(','V','I','E','W',')',                '=','V','Y','U','W','5'|0x80,
-'(','V',')',                            '=','V'|0x80,
+    ']', 'V' | 0x80,
+    ' ', '(', 'V', ')', ' ', '=', 'V', 'I', 'Y', '4' | 0x80,
+    '(', 'V', 'I', 'E', 'W', ')', '=', 'V', 'Y', 'U', 'W', '5' | 0x80,
+    '(', 'V', ')', '=', 'V' | 0x80,
 
-']','W'|0x80,
-' ','(','W',')',' ',                    '=','D','A','H','4','B','U','L','Y','U','W'|0x80,
-' ','(','W','E','R','E',')',            '=','W','E','R'|0x80,
-'(','W','A',')','S','H',                '=','W','A','A'|0x80,
-'(','W','A',')','S','T',                '=','W','E','Y'|0x80,
-'(','W','A',')','S',                    '=','W','A','H'|0x80,
-'(','W','A',')','T',                    '=','W','A','A'|0x80,
-'(','W','H','E','R','E',')',            '=','W','H','E','H','R'|0x80,
-'(','W','H','A','T',')',                '=','W','H','A','H','T'|0x80,
-'(','W','H','O','L',')',                '=','/','H','O','W','L'|0x80,
-'(','W','H','O',')',                    '=','/','H','U','W'|0x80,
-'(','W','H',')',                        '=','W','H'|0x80,
-'(','W','A','R',')','#',                '=','W','E','H','R'|0x80,
-'(','W','A','R',')',                    '=','W','A','O','R'|0x80,
-'(','W','O','R',')','^',                '=','W','E','R'|0x80,
-'(','W','R',')',                        '=','R'|0x80,
-'(','W','O','M',')','A',                '=','W','U','H','M'|0x80,
-'(','W','O','M',')','E',                '=','W','I','H','M'|0x80,
-'(','W','E','A',')','R',                '=','W','E','H'|0x80,
-'(','W','A','N','T',')',                '=','W','A','A','5','N','T'|0x80,
-'A','N','S','(','W','E','R',')',        '=','E','R'|0x80,
-'(','W',')',                            '=','W'|0x80,
+    ']', 'W' | 0x80,
+    ' ', '(', 'W', ')', ' ', '=', 'D', 'A', 'H', '4', 'B', 'U', 'L', 'Y', 'U', 'W' | 0x80,
+    ' ', '(', 'W', 'E', 'R', 'E', ')', '=', 'W', 'E', 'R' | 0x80,
+    '(', 'W', 'A', ')', 'S', 'H', '=', 'W', 'A', 'A' | 0x80,
+    '(', 'W', 'A', ')', 'S', 'T', '=', 'W', 'E', 'Y' | 0x80,
+    '(', 'W', 'A', ')', 'S', '=', 'W', 'A', 'H' | 0x80,
+    '(', 'W', 'A', ')', 'T', '=', 'W', 'A', 'A' | 0x80,
+    '(', 'W', 'H', 'E', 'R', 'E', ')', '=', 'W', 'H', 'E', 'H', 'R' | 0x80,
+    '(', 'W', 'H', 'A', 'T', ')', '=', 'W', 'H', 'A', 'H', 'T' | 0x80,
+    '(', 'W', 'H', 'O', 'L', ')', '=', '/', 'H', 'O', 'W', 'L' | 0x80,
+    '(', 'W', 'H', 'O', ')', '=', '/', 'H', 'U', 'W' | 0x80,
+    '(', 'W', 'H', ')', '=', 'W', 'H' | 0x80,
+    '(', 'W', 'A', 'R', ')', '#', '=', 'W', 'E', 'H', 'R' | 0x80,
+    '(', 'W', 'A', 'R', ')', '=', 'W', 'A', 'O', 'R' | 0x80,
+    '(', 'W', 'O', 'R', ')', '^', '=', 'W', 'E', 'R' | 0x80,
+    '(', 'W', 'R', ')', '=', 'R' | 0x80,
+    '(', 'W', 'O', 'M', ')', 'A', '=', 'W', 'U', 'H', 'M' | 0x80,
+    '(', 'W', 'O', 'M', ')', 'E', '=', 'W', 'I', 'H', 'M' | 0x80,
+    '(', 'W', 'E', 'A', ')', 'R', '=', 'W', 'E', 'H' | 0x80,
+    '(', 'W', 'A', 'N', 'T', ')', '=', 'W', 'A', 'A', '5', 'N', 'T' | 0x80,
+    'A', 'N', 'S', '(', 'W', 'E', 'R', ')', '=', 'E', 'R' | 0x80,
+    '(', 'W', ')', '=', 'W' | 0x80,
 
-']','X'|0x80,
-' ','(','X',')',' ',                    '=','E','H','4','K','R'|0x80,
-' ','(','X',')',                        '=','Z'|0x80,
-'(','X',')',                            '=','K','S'|0x80,
+    ']', 'X' | 0x80,
+    ' ', '(', 'X', ')', ' ', '=', 'E', 'H', '4', 'K', 'R' | 0x80,
+    ' ', '(', 'X', ')', '=', 'Z' | 0x80,
+    '(', 'X', ')', '=', 'K', 'S' | 0x80,
 
-']','Y'|0x80,
-' ','(','Y',')',' ',                    '=','W','A','Y','4'|0x80,
-'(','Y','O','U','N','G',')',            '=','Y','A','H','N','X'|0x80,
-' ','(','Y','O','U','R',')',            '=','Y','O','H','R'|0x80,
-' ','(','Y','O','U',')',                '=','Y','U','W'|0x80,
-' ','(','Y','E','S',')',                '=','Y','E','H','S'|0x80,
-' ','(','Y',')',                        '=','Y'|0x80,
-'F','(','Y',')',                        '=','A','Y'|0x80,
-'P','S','(','Y','C','H',')',            '=','A','Y','K'|0x80,
-'#',':','^','(','Y',')',                '=','I','Y'|0x80,
-'#',':','^','(','Y',')','I',            '=','I','Y'|0x80,
-' ',':','(','Y',')',' ',                '=','A','Y'|0x80,
-' ',':','(','Y',')','#',                '=','A','Y'|0x80,
-' ',':','(','Y',')','^','+',':','#',    '=','I','H'|0x80,
-' ',':','(','Y',')','^','#',            '=','A','Y'|0x80,
-'(','Y',')',                            '=','I','H'|0x80,
+    ']', 'Y' | 0x80,
+    ' ', '(', 'Y', ')', ' ', '=', 'W', 'A', 'Y', '4' | 0x80,
+    '(', 'Y', 'O', 'U', 'N', 'G', ')', '=', 'Y', 'A', 'H', 'N', 'X' | 0x80,
+    ' ', '(', 'Y', 'O', 'U', 'R', ')', '=', 'Y', 'O', 'H', 'R' | 0x80,
+    ' ', '(', 'Y', 'O', 'U', ')', '=', 'Y', 'U', 'W' | 0x80,
+    ' ', '(', 'Y', 'E', 'S', ')', '=', 'Y', 'E', 'H', 'S' | 0x80,
+    ' ', '(', 'Y', ')', '=', 'Y' | 0x80,
+    'F', '(', 'Y', ')', '=', 'A', 'Y' | 0x80,
+    'P', 'S', '(', 'Y', 'C', 'H', ')', '=', 'A', 'Y', 'K' | 0x80,
+    '#', ':', '^', '(', 'Y', ')', '=', 'I', 'Y' | 0x80,
+    '#', ':', '^', '(', 'Y', ')', 'I', '=', 'I', 'Y' | 0x80,
+    ' ', ':', '(', 'Y', ')', ' ', '=', 'A', 'Y' | 0x80,
+    ' ', ':', '(', 'Y', ')', '#', '=', 'A', 'Y' | 0x80,
+    ' ', ':', '(', 'Y', ')', '^', '+', ':', '#', '=', 'I', 'H' | 0x80,
+    ' ', ':', '(', 'Y', ')', '^', '#', '=', 'A', 'Y' | 0x80,
+    '(', 'Y', ')', '=', 'I', 'H' | 0x80,
 
-']','Z'|0x80,
-' ','(','Z',')',' ',                    '=','Z','I','Y','4'|0x80,
-'(','Z',')',                            '=','Z'|0x80,
-'j'|0x80
+    ']', 'Z' | 0x80,
+    ' ', '(', 'Z', ')', ' ', '=', 'Z', 'I', 'Y', '4' | 0x80,
+    '(', 'Z', ')', '=', 'Z' | 0x80,
+    'j' | 0x80
 };
 
-char rules2[] =
-{
-'(','A',')',                            '='|0x80,
-'(','!',')',                            '=','.'|0x80,
-'(','"',')',' ',                        '=','-','A','H','5','N','K','W','O','W','T','-'|0x80,
-'(','"',')',                            '=','K','W','O','W','4','T','-'|0x80,
-'(','#',')',                            '=',' ','N','A','H','4','M','B','E','R'|0x80,
-'(','$',')',                            '=',' ','D','A','A','4','L','E','R'|0x80,
-'(','%',')',                            '=',' ','P','E','R','S','E','H','4','N','T'|0x80,
-'(','&',')',                            '=',' ','A','E','N','D'|0x80,
-'(','\'',')',                           '='|0x80,
-'(','*',')',                            '=',' ','A','E','4','S','T','E','R','I','H','S','K'|0x80,
-'(','+',')',                            '=',' ','P','L','A','H','4','S'|0x80,
-'(',',',')',                            '=',','|0x80,
-' ','(','-',')',' ',                    '=','-'|0x80,
-'(','-',')',                            '='|0x80,
-'(','.',')',                            '=',' ','P','O','Y','N','T'|0x80,
-'(','/',')',                            '=',' ','S','L','A','E','4','S','H'|0x80,
-'(','0',')',                            '=',' ','Z','I','Y','4','R','O','W'|0x80,
-' ','(','1','S','T',')',                '=','F','E','R','4','S','T'|0x80,
-' ','(','1','0','T','H',')',            '=','T','E','H','4','N','T','H'|0x80,
-'(','1',')',                            '=',' ','W','A','H','4','N'|0x80,
-' ','(','2','N','D',')',                '=','S','E','H','4','K','U','N','D'|0x80,
-'(','2',')',                            '=',' ','T','U','W','4'|0x80,
-' ','(','3','R','D',')',                '=','T','H','E','R','4','D'|0x80,
-'(','3',')',                            '=',' ','T','H','R','I','Y','4'|0x80,
-'(','4',')',                            '=',' ','F','O','H','4','R'|0x80,
-' ','(','5','T','H',')',                '=','F','I','H','4','F','T','H'|0x80,
-'(','5',')',                            '=',' ','F','A','Y','4','V'|0x80,
-' ','(','6','4',')',' ',                '=','S','I','H','4','K','S','T','I','Y',' ','F','O','H','R'|0x80,
-'(','6',')',                            '=',' ','S','I','H','4','K','S'|0x80,
-'(','7',')',                            '=',' ','S','E','H','4','V','U','N'|0x80,
-' ','(','8','T','H',')',                '=','E','Y','4','T','H'|0x80,
-'(','8',')',                            '=',' ','E','Y','4','T'|0x80,
-'(','9',')',                            '=',' ','N','A','Y','4','N'|0x80,
-'(',':',')',                            '=','.'|0x80,
-'(',';',')',                            '=','.'|0x80,
-'(','<',')',                            '=',' ','L','E','H','4','S',' ','D','H','A','E','N'|0x80,
-'(','=',')',                            '=',' ','I','Y','4','K','W','U','L','Z'|0x80,
-'(','>',')',                            '=',' ','G','R','E','Y','4','T','E','R',' ','D','H','A','E','N'|0x80,
-'(','?',')',                            '=','?'|0x80,
-'(','@',')',                            '=',' ','A','E','6','T'|0x80,
-'(','^',')',                            '=',' ','K','A','E','4','R','I','X','T'|0x80,
-']','A'|0x80
+static const unsigned char rules2[] = {
+    '(', 'A', ')', '=' | 0x80,
+    '(', '!', ')', '=', '.' | 0x80,
+    '(', '"', ')', ' ', '=', '-', 'A', 'H', '5', 'N', 'K', 'W', 'O', 'W', 'T', '-' | 0x80,
+    '(', '"', ')', '=', 'K', 'W', 'O', 'W', '4', 'T', '-' | 0x80,
+    '(', '#', ')', '=', ' ', 'N', 'A', 'H', '4', 'M', 'B', 'E', 'R' | 0x80,
+    '(', '$', ')', '=', ' ', 'D', 'A', 'A', '4', 'L', 'E', 'R' | 0x80,
+    '(', '%', ')', '=', ' ', 'P', 'E', 'R', 'S', 'E', 'H', '4', 'N', 'T' | 0x80,
+    '(', '&', ')', '=', ' ', 'A', 'E', 'N', 'D' | 0x80,
+    '(', '\'', ')', '=' | 0x80,
+    '(', '*', ')', '=', ' ', 'A', 'E', '4', 'S', 'T', 'E', 'R', 'I', 'H', 'S', 'K' | 0x80,
+    '(', '+', ')', '=', ' ', 'P', 'L', 'A', 'H', '4', 'S' | 0x80,
+    '(', ',', ')', '=', ',' | 0x80,
+    ' ', '(', '-', ')', ' ', '=', '-' | 0x80,
+    '(', '-', ')', '=' | 0x80,
+    '(', '.', ')', '=', ' ', 'P', 'O', 'Y', 'N', 'T' | 0x80,
+    '(', '/', ')', '=', ' ', 'S', 'L', 'A', 'E', '4', 'S', 'H' | 0x80,
+    '(', '0', ')', '=', ' ', 'Z', 'I', 'Y', '4', 'R', 'O', 'W' | 0x80,
+    ' ', '(', '1', 'S', 'T', ')', '=', 'F', 'E', 'R', '4', 'S', 'T' | 0x80,
+    ' ', '(', '1', '0', 'T', 'H', ')', '=', 'T', 'E', 'H', '4', 'N', 'T', 'H' | 0x80,
+    '(', '1', ')', '=', ' ', 'W', 'A', 'H', '4', 'N' | 0x80,
+    ' ', '(', '2', 'N', 'D', ')', '=', 'S', 'E', 'H', '4', 'K', 'U', 'N', 'D' | 0x80,
+    '(', '2', ')', '=', ' ', 'T', 'U', 'W', '4' | 0x80,
+    ' ', '(', '3', 'R', 'D', ')', '=', 'T', 'H', 'E', 'R', '4', 'D' | 0x80,
+    '(', '3', ')', '=', ' ', 'T', 'H', 'R', 'I', 'Y', '4' | 0x80,
+    '(', '4', ')', '=', ' ', 'F', 'O', 'H', '4', 'R' | 0x80,
+    ' ', '(', '5', 'T', 'H', ')', '=', 'F', 'I', 'H', '4', 'F', 'T', 'H' | 0x80,
+    '(', '5', ')', '=', ' ', 'F', 'A', 'Y', '4', 'V' | 0x80,
+    ' ', '(', '6', '4', ')', ' ', '=', 'S', 'I', 'H', '4', 'K', 'S', 'T', 'I', 'Y', ' ', 'F', 'O', 'H', 'R' | 0x80,
+    '(', '6', ')', '=', ' ', 'S', 'I', 'H', '4', 'K', 'S' | 0x80,
+    '(', '7', ')', '=', ' ', 'S', 'E', 'H', '4', 'V', 'U', 'N' | 0x80,
+    ' ', '(', '8', 'T', 'H', ')', '=', 'E', 'Y', '4', 'T', 'H' | 0x80,
+    '(', '8', ')', '=', ' ', 'E', 'Y', '4', 'T' | 0x80,
+    '(', '9', ')', '=', ' ', 'N', 'A', 'Y', '4', 'N' | 0x80,
+    '(', ':', ')', '=', '.' | 0x80,
+    '(', ';', ')', '=', '.' | 0x80,
+    '(', '<', ')', '=', ' ', 'L', 'E', 'H', '4', 'S', ' ', 'D', 'H', 'A', 'E', 'N' | 0x80,
+    '(', '=', ')', '=', ' ', 'I', 'Y', '4', 'K', 'W', 'U', 'L', 'Z' | 0x80,
+    '(', '>', ')', '=', ' ', 'G', 'R', 'E', 'Y', '4', 'T', 'E', 'R', ' ', 'D', 'H', 'A', 'E', 'N' | 0x80,
+    '(', '?', ')', '=', '?' | 0x80,
+    '(', '@', ')', '=', ' ', 'A', 'E', '6', 'T' | 0x80,
+    '(', '^', ')', '=', ' ', 'K', 'A', 'E', '4', 'R', 'I', 'X', 'T' | 0x80,
+    ']', 'A' | 0x80
 };
 
-
-//26 items. From 'A' to 'Z'
-// positions for mem62 and mem63 for each character
-unsigned char tab37489[] =
-{
-0, 149, 247, 162, 57, 197, 6, 126,
-199, 38, 55, 78, 145, 241, 85, 161,
-254, 36, 69, 45, 167, 54, 83, 46,
-71, 218
+// 26 items. From 'A' to 'Z'
+//  positions for mem62 and mem63 for each character
+static const unsigned char tab37489[] = {
+    0, 149, 247, 162, 57, 197, 6, 126,
+    199, 38, 55, 78, 145, 241, 85, 161,
+    254, 36, 69, 45, 167, 54, 83, 46,
+    71, 218
 };
 
-unsigned char tab37515[] =
-{
-125, 126, 126, 127, 128, 129, 130, 130,
-130, 132, 132, 132, 132, 132, 133, 135,
-135, 136, 136, 137, 138, 139, 139, 140,
-140, 140
+static const unsigned char tab37515[] = {
+    125, 126, 126, 127, 128, 129, 130, 130,
+    130, 132, 132, 132, 132, 132, 133, 135,
+    135, 136, 136, 137, 138, 139, 139, 140,
+    140, 140
 };
 
-void SetSAMInputFull(unsigned char* _input, unsigned char _speed, unsigned char _pitch, unsigned char _mouth, unsigned char _throat)
+char* GetBuffer()
 {
-    speed = _speed;
-    pitch = _pitch;
-    mouth = _mouth;
-    throat = _throat;
-
-    int i, l;
-    l = strlen((char*)_input);
-    if (l > 254) l = 254;
-    for (i = 0; i < l; i++)
-        input[i] = _input[i];
-    input[l] = 0;
-}
-
-
-char* GetBuffer() { return buffer; };
+    return buffer;
+};
 
 int GetBufferLength()
 {
     return bufferpos / 50;
 }
 
+void SetSAMInputFull(unsigned char* _input, unsigned char _speed, unsigned char _pitch, unsigned char _mouth, unsigned char _throat)
+{
+    input = _input;
+    speed = _speed;
+    pitch = _pitch;
+    mouth = _mouth;
+    throat = _throat;
+}
 
-void Init()
+static void Init()
 {
     int i;
     SetMouthThroat(mouth, throat);
 
     bufferpos = 0;
     // TODO, check for free the memory, 10 seconds of output should be more than enough
-    buffer = malloc(22050 * 10);
+    const int buffersize = 22050 * 10; // fixme: test for overflow
+    buffer = malloc(buffersize);
+    memset(buffer, 0, buffersize);
 
     for (i = 0; i < 256; i++) {
         stress[i] = 0;
@@ -1365,15 +1140,13 @@ void Init()
         stressOutput[i] = 0;
         phonemeLengthOutput[i] = 0;
     }
-    phonemeindex[255] = END; // to prevent buffer overflow // ML : changed from 32 to 255 to stop freezing with long inputs
+
+    phonemeindex[255] = END;
 }
 
 int SAMMain()
 {
-    unsigned char X = 0; //!! is this intended like this?
     Init();
-    /* FIXME: At odds with assignment in Init() */
-    phonemeindex[255] = 32; // to prevent buffer overflow
 
     if (!Parser1()) return 0;
     Parser2();
@@ -1381,14 +1154,14 @@ int SAMMain()
     SetPhonemeLength();
     AdjustLengths();
     Code41240();
+    unsigned char X = 0;
     do {
-        if (phonemeindex[X] > 80) {
+        if (phonemeindex[X] >= (sizeof(flags) / sizeof(flags[0]))) {
             phonemeindex[X] = END;
             break; // error: delete all behind it
         }
     } while (++X != 0);
     InsertBreath();
-
     PrepareOutput();
     return 1;
 }
@@ -1594,7 +1367,7 @@ int Parser1()
 
     memset(stress, 0, 256); // Clear the stress table.
 
-    while ((sign1 = input[srcpos]) != 155) { // 155 (\233) is end of line marker
+    while ((sign1 = input[srcpos]) != EOL) {
         signed int match;
         unsigned char sign2 = input[++srcpos];
         if ((match = full_match(sign1, sign2)) != -1) {
@@ -1622,7 +1395,7 @@ int Parser1()
 }
 
 // change phonemelength depedendent on stress
-void SetPhonemeLength()
+static void SetPhonemeLength()
 {
     int position = 0;
     while (phonemeindex[position] != 255) {
@@ -1636,7 +1409,7 @@ void SetPhonemeLength()
     }
 }
 
-void Code41240()
+static void Code41240()
 {
     unsigned char pos = 0;
 
@@ -1665,7 +1438,7 @@ void Code41240()
     }
 }
 
-void ChangeRule(unsigned char position, unsigned char mem60, const char* descr)
+static void ChangeRule(unsigned char position, unsigned char mem60, const char* descr)
 {
     phonemeindex[position] = 13; // rule;
     Insert(position + 1, mem60, 0, stress[position]);
@@ -1695,7 +1468,7 @@ void ChangeRule(unsigned char position, unsigned char mem60, const char* descr)
 //       <UNSTRESSED VOWEL> T <PAUSE> -> <UNSTRESSED VOWEL> DX <PAUSE>
 //       <UNSTRESSED VOWEL> D <PAUSE>  -> <UNSTRESSED VOWEL> DX <PAUSE>
 
-void rule_alveolar_uw(unsigned char X)
+static void rule_alveolar_uw(unsigned char X)
 {
     // ALVEOLAR flag set?
     if (flags[phonemeindex[X - 1]] & FLAG_ALVEOLAR) {
@@ -1703,17 +1476,17 @@ void rule_alveolar_uw(unsigned char X)
     }
 }
 
-void rule_ch(unsigned char X)
+static void rule_ch(unsigned char X)
 {
     Insert(X + 1, 43, 0, stress[X]);
 }
 
-void rule_j(unsigned char X)
+static void rule_j(unsigned char X)
 {
     Insert(X + 1, 45, 0, stress[X]);
 }
 
-void rule_g(unsigned char pos)
+static void rule_g(unsigned char pos)
 {
     // G <VOWEL OR DIPTHONG NOT ENDING WITH IY> -> GX <VOWEL OR DIPTHONG NOT ENDING WITH IY>
     // Example: GO
@@ -1727,12 +1500,12 @@ void rule_g(unsigned char pos)
     }
 }
 
-void change(unsigned char pos, unsigned char val, const char* rule)
+static void change(unsigned char pos, unsigned char val, const char* rule)
 {
     phonemeindex[pos] = val;
 }
 
-void rule_dipthong(unsigned char p, unsigned short pf, unsigned char pos)
+static void rule_dipthong(unsigned char p, unsigned short pf, unsigned char pos)
 {
     // <DIPTHONG ENDING WITH WX> -> <DIPTHONG ENDING WITH WX> WX
     // <DIPTHONG NOT ENDING WITH WX> -> <DIPTHONG NOT ENDING WITH WX> YX
@@ -1752,7 +1525,7 @@ void rule_dipthong(unsigned char p, unsigned short pf, unsigned char pos)
         rule_j(pos); // Example: JAY
 }
 
-void Parser2()
+static void Parser2()
 {
     unsigned char pos = 0; // mem66;
     unsigned char p;
@@ -1978,68 +1751,75 @@ void AdjustLengths()
     }
 }
 
-void AddInflection(unsigned char mem48, unsigned char X);
-
-//return = hibyte(mem39212*mem39213) <<  1
-unsigned char trans(unsigned char a, unsigned char b)
+// return = hibyte(mem39212*mem39213) <<  1
+static unsigned char trans(unsigned char a, unsigned char b)
 {
     return (((unsigned int)a * b) >> 8) << 1;
 }
 
-//timetable for more accurate c64 simulation
-static const int timetable[5][5] =
-{
-	{162, 167, 167, 127, 128},
-	{226, 60, 60, 0, 0},
-	{225, 60, 59, 0, 0},
-	{200, 0, 0, 54, 55},
-	{199, 0, 0, 54, 54}
+// timetable for more accurate c64 simulation
+static const int timetable[5][5] = {
+    { 162, 167, 167, 127, 128 },
+    { 226, 60, 60, 0, 0 },
+    { 225, 60, 59, 0, 0 },
+    { 200, 0, 0, 54, 55 },
+    { 199, 0, 0, 54, 54 }
 };
 
-void Output(int index, unsigned char A)
+static unsigned oldtimetableindex = 0;
+
+static void Output8BitAry(int index, unsigned char ary[5])
 {
-	static unsigned oldtimetableindex = 0;
-	int k;
-	bufferpos += timetable[oldtimetableindex][index];
-	oldtimetableindex = index;
-	// write a little bit in advance
-	for(k=0; k<5; k++)
-		buffer[bufferpos/50 + k] = (A & 15)*16;
+    int k;
+    bufferpos += timetable[oldtimetableindex][index];
+    oldtimetableindex = index;
+    // write a little bit in advance, to make up for larger steps
+    for (k = 0; k < 5; k++)
+        buffer[bufferpos / 50 + k] = ary[k];
 }
 
+static void Output8Bit(int index, unsigned char A)
+{
+    unsigned char ary[5] = { A, A, A, A, A };
+    Output8BitAry(index, ary);
+}
 
 static unsigned char RenderVoicedSample(unsigned short hi, unsigned char off, unsigned char phase1)
 {
-	do {
-		unsigned char bit = 8;
-		unsigned char sample = sampleTable[hi+off];
-		do {
-			if ((sample & 128) != 0) Output(3, 26);
-			else Output(4, 6);
-			sample <<= 1;
-		} while(--bit != 0);
-		off++;
-	} while (++phase1 != 0);
-	return off;
+    do {
+        unsigned char bit = 8;
+        unsigned char sample = sampleTable[hi + off];
+        do {
+            if (sample & 128) {
+                Output8Bit(4, 96);
+            } else {
+                Output8Bit(3, 160);
+            }
+            sample <<= 1;
+        } while (--bit != 0);
+        off++;
+    } while (++phase1 != 0);
+    return off;
 }
 
 static void RenderUnvoicedSample(unsigned short hi, unsigned char off, unsigned char mem53)
 {
     do {
         unsigned char bit = 8;
-        unsigned char sample = sampleTable[hi+off];
+        unsigned char sample = sampleTable[hi + off];
         do {
-            if ((sample & 128) != 0) Output(2, 5);
-            else Output(1, mem53);
+            if ((sample & 128) != 0) {
+                Output8Bit(2, 80);
+            } else {
+                Output8Bit(1, (mem53 & 0x0f) * 16);
+            }
             sample <<= 1;
         } while (--bit != 0);
     } while (++off != 0);
 }
 
-
-
 // -------------------------------------------------------------------------
-//Code48227
+// Code48227
 // Render a sampled sound from the sampleTable.
 //
 //   Phoneme   Sample Start   Sample End
@@ -2060,7 +1840,7 @@ static void RenderUnvoicedSample(unsigned short hi, unsigned char off, unsigned 
 //   44: J*
 //   45: **    257            276
 //   46: **
-// 
+//
 //   66: P*
 //   67: **    743            767
 //   68: **
@@ -2092,35 +1872,33 @@ static void RenderUnvoicedSample(unsigned short hi, unsigned char off, unsigned 
 //
 // For voices samples, samples are interleaved between voiced output.
 
+void RenderSample(unsigned char* mem66, unsigned char consonantFlag, unsigned char mem49)
+{
+    // mem49 == current phoneme's index
 
-void RenderSample(unsigned char *mem66, unsigned char consonantFlag, unsigned char mem49)
-{     
-	// mem49 == current phoneme's index
+    // mask low three bits and subtract 1 get value to
+    // convert 0 bits on unvoiced samples.
+    unsigned char hibyte = (consonantFlag & 7) - 1;
 
-	// mask low three bits and subtract 1 get value to 
-	// convert 0 bits on unvoiced samples.
-	unsigned char hibyte = (consonantFlag & 7)-1;
-	
-	// determine which offset to use from table { 0x18, 0x1A, 0x17, 0x17, 0x17 }
-	// T, S, Z                0          0x18
-	// CH, J, SH, ZH          1          0x1A
-	// P, F*, V, TH, DH       2          0x17
-	// /H                     3          0x17
-	// /X                     4          0x17
+    // determine which offset to use from table { 0x18, 0x1A, 0x17, 0x17, 0x17 }
+    // T, S, Z                0          0x18
+    // CH, J, SH, ZH          1          0x1A
+    // P, F*, V, TH, DH       2          0x17
+    // /H                     3          0x17
+    // /X                     4          0x17
 
-    unsigned short hi = hibyte*256;
-	// voiced sample?
-	unsigned char pitchl = consonantFlag & 248;
-	if(pitchl == 0) {
+    unsigned short hi = hibyte * 256;
+    // voiced sample?
+    unsigned char pitchl = consonantFlag & 248;
+    if (pitchl == 0) {
         // voiced phoneme: Z*, ZH, V*, DH
-		pitchl = pitches[mem49] >> 4;
+        pitchl = pitches[mem49] >> 4;
         *mem66 = RenderVoicedSample(hi, *mem66, pitchl ^ 255);
-	}
-	else
-		RenderUnvoicedSample(hi, pitchl^255, tab48426[hibyte]);
+    } else {
+        static const unsigned char tab48426[5] = { 0x18, 0x1A, 0x17, 0x17, 0x17 };
+        RenderUnvoicedSample(hi, pitchl ^ 255, tab48426[hibyte]);
+    }
 }
-
-
 
 // CREATE FRAMES
 //
@@ -2132,60 +1910,67 @@ void RenderSample(unsigned char *mem66, unsigned char consonantFlag, unsigned ch
 //
 static void CreateFrames()
 {
-	unsigned char X = 0;
+    unsigned char X = 0;
     unsigned int i = 0;
-    while(i < 256) {
+    while (i < 256) {
         // get the phoneme at the index
         unsigned char phoneme = phonemeIndexOutput[i];
-		unsigned char phase1;
-		unsigned phase2;
-	
+        unsigned char phase1;
+        unsigned phase2;
+
         // if terminal phoneme, exit the loop
         if (phoneme == 255) break;
-	
-        if (phoneme == PHONEME_PERIOD)   AddInflection(RISING_INFLECTION, X);
-        else if (phoneme == PHONEME_QUESTION) AddInflection(FALLING_INFLECTION, X);
+
+        if (phoneme == PHONEME_PERIOD) {
+            AddInflection(RISING_INFLECTION, X);
+        } else if (phoneme == PHONEME_QUESTION) {
+            AddInflection(FALLING_INFLECTION, X);
+        }
 
         // get the stress amount (more stress = higher pitch)
+        static const unsigned char tab47492[] = {
+            0, 0, 0xE0, 0xE6, 0xEC, 0xF3, 0xF9, 0,
+            6, 0xC, 6
+        };
         phase1 = tab47492[stressOutput[i] + 1];
-	
+
         // get number of frames to write
         phase2 = phonemeLengthOutput[i];
-	
+
         // copy from the source to the frames list
         do {
-            frequency1[X] = freq1data[phoneme];     // F1 frequency
-            frequency2[X] = freq2data[phoneme];     // F2 frequency
-            frequency3[X] = freq3data[phoneme];     // F3 frequency
-            amplitude1[X] = ampl1data[phoneme];     // F1 amplitude
-            amplitude2[X] = ampl2data[phoneme];     // F2 amplitude
-            amplitude3[X] = ampl3data[phoneme];     // F3 amplitude
-            sampledConsonantFlag[X] = sampledConsonantFlags[phoneme];        // phoneme data for sampled consonants
-            pitches[X] = pitch + phase1;      // pitch
+            frequency1[X] = freq1data[phoneme]; // F1 frequency
+            frequency2[X] = freq2data[phoneme]; // F2 frequency
+            frequency3[X] = freq3data[phoneme]; // F3 frequency
+            amplitude1[X] = ampl1data[phoneme]; // F1 amplitude
+            amplitude2[X] = ampl2data[phoneme]; // F2 amplitude
+            amplitude3[X] = ampl3data[phoneme]; // F3 amplitude
+            sampledConsonantFlag[X] = sampledConsonantFlags[phoneme]; // phoneme data for sampled consonants
+            pitches[X] = pitch + phase1; // pitch
             ++X;
-        } while(--phase2 != 0);
-        
+        } while (--phase2 != 0);
+
         ++i;
     }
 }
-
 
 // RESCALE AMPLITUDE
 //
 // Rescale volume from a linear scale to decibels.
 //
-void RescaleAmplitude() 
+static void RescaleAmplitude()
 {
+    static const unsigned char amplitudeRescale[] = {
+        0, 1, 2, 2, 2, 3, 3, 4,
+        4, 5, 6, 8, 9, 11, 13, 15
+    };
     int i;
-    for(i=255; i>=0; i--)
-        {
-            amplitude1[i] = amplitudeRescale[amplitude1[i]];
-            amplitude2[i] = amplitudeRescale[amplitude2[i]];
-            amplitude3[i] = amplitudeRescale[amplitude3[i]];
-        }
+    for (i = 255; i >= 0; i--) {
+        amplitude1[i] = amplitudeRescale[amplitude1[i]];
+        amplitude2[i] = amplitudeRescale[amplitude2[i]];
+        amplitude3[i] = amplitudeRescale[amplitude3[i]];
+    }
 }
-
-
 
 // ASSIGN PITCH CONTOUR
 //
@@ -2193,16 +1978,15 @@ void RescaleAmplitude()
 // pitch contour. Without this, the output would be at a single
 // pitch level (monotone).
 
-void AssignPitchContour()
-{	
+static void AssignPitchContour()
+{
     int i;
-    for(i=0; i<256; i++) {
+    for (i = 0; i < 256; i++) {
         // subtract half the frequency of the formant 1.
         // this adds variety to the voice
         pitches[i] -= (frequency1[i] >> 1);
     }
 }
-
 
 // RENDER THE PHONEMES IN THE LIST
 //
@@ -2217,11 +2001,11 @@ void AssignPitchContour()
 // 3. Offset the pitches by the fundamental frequency.
 //
 // 4. Render the each frame.
-void Render()
+static void Render()
 {
     unsigned char t;
 
-	if (phonemeIndexOutput[0] == 255) return; //exit if no data
+    if (phonemeIndexOutput[0] == 255) return; // exit if no data
 
     CreateFrames();
     t = CreateTransitions();
@@ -2236,11 +2020,11 @@ void Render()
 //
 // Linear transitions are now created to smoothly connect each
 // phoeneme. This transition is spread between the ending frames
-// of the old phoneme (outBlendLength), and the beginning frames 
+// of the old phoneme (outBlendLength), and the beginning frames
 // of the new phoneme (inBlendLength).
 //
-// To determine how many frames to use, the two phonemes are 
-// compared using the blendRank[] table. The phoneme with the 
+// To determine how many frames to use, the two phonemes are
+// compared using the blendRank[] table. The phoneme with the
 // smaller score is used. In case of a tie, a blend of each is used:
 //
 //      if blendRank[phoneme1] ==  blendRank[phomneme2]
@@ -2266,151 +2050,128 @@ void Render()
 // pitch from the center of the current phoneme to the center of the next
 // phoneme.
 
-// From render.c
-extern unsigned char phonemeIndexOutput[60]; //tab47296
-extern unsigned char phonemeLengthOutput[60]; //tab47416
-
-// from RenderTabs.h
-extern unsigned char blendRank[];
-extern unsigned char outBlendLength[];
-extern unsigned char inBlendLength[];
-extern unsigned char pitches[];
-
-extern unsigned char frequency1[256];
-extern unsigned char frequency2[256];
-extern unsigned char frequency3[256];
-
-extern unsigned char amplitude1[256];
-extern unsigned char amplitude2[256];
-extern unsigned char amplitude3[256];
-
-//written by me because of different table positions.
-// mem[47] = ...
-// 168=pitches
-// 169=frequency1
-// 170=frequency2
-// 171=frequency3
-// 172=amplitude1
-// 173=amplitude2
-// 174=amplitude3
-unsigned char Read(unsigned char p, unsigned char Y)
+// written by me because of different table positions.
+//  mem[47] = ...
+//  168=pitches
+//  169=frequency1
+//  170=frequency2
+//  171=frequency3
+//  172=amplitude1
+//  173=amplitude2
+//  174=amplitude3
+static unsigned char Read(unsigned char p, unsigned char Y)
 {
-	switch(p)
-	{
-	case 168: return pitches[Y];
-	case 169: return frequency1[Y];
-	case 170: return frequency2[Y];
-	case 171: return frequency3[Y];
-	case 172: return amplitude1[Y];
-	case 173: return amplitude2[Y];
-	case 174: return amplitude3[Y];
-	default: 
-		printf("Error reading from tables");
-		return 0;
-	}
+    switch (p) {
+        case 168: return pitches[Y];
+        case 169: return frequency1[Y];
+        case 170: return frequency2[Y];
+        case 171: return frequency3[Y];
+        case 172: return amplitude1[Y];
+        case 173: return amplitude2[Y];
+        case 174: return amplitude3[Y];
+        default: return 0;
+    }
 }
 
-void Write(unsigned char p, unsigned char Y, unsigned char value)
+static void Write(unsigned char p, unsigned char Y, unsigned char value)
 {
-	switch(p)
-	{
-	case 168: pitches[Y]    = value; return;
-	case 169: frequency1[Y] = value; return;
-	case 170: frequency2[Y] = value; return;
-	case 171: frequency3[Y] = value; return;
-	case 172: amplitude1[Y] = value; return;
-	case 173: amplitude2[Y] = value; return;
-	case 174: amplitude3[Y] = value; return;
-	default:
-		printf("Error writing to tables\n");
-		return;
-	}
+    switch (p) {
+        case 168: pitches[Y] = value; return;
+        case 169: frequency1[Y] = value; return;
+        case 170: frequency2[Y] = value; return;
+        case 171: frequency3[Y] = value; return;
+        case 172: amplitude1[Y] = value; return;
+        case 173: amplitude2[Y] = value; return;
+        case 174: amplitude3[Y] = value; return;
+    }
 }
-
 
 // linearly interpolate values
-void interpolate(unsigned char width, unsigned char table, unsigned char frame, char mem53)
+static void interpolate(unsigned char width, unsigned char table, unsigned char frame, char mem53)
 {
-    unsigned char sign      = (mem53 < 0);
+    unsigned char sign = (mem53 < 0);
     unsigned char remainder = abs(mem53) % width;
-    unsigned char div       = mem53 / width;
+    unsigned char div = mem53 / width;
 
     unsigned char error = 0;
-    unsigned char pos   = width;
-    unsigned char val   = Read(table, frame) + div; 
+    unsigned char pos = width;
+    unsigned char val = Read(table, frame) + div;
 
-    while(--pos) {
+    while (--pos) {
         error += remainder;
         if (error >= width) { // accumulated a whole integer error, so adjust output
             error -= width;
-            if (sign) val--;
-            else if (val) val++; // if input is 0, we always leave it alone
+            if (sign) {
+                val--;
+            } else if (val) {
+                val++; // if input is 0, we always leave it alone
+            }
         }
         Write(table, ++frame, val); // Write updated value back to next frame.
         val += div;
     }
 }
 
-void interpolate_pitch(unsigned char pos, unsigned char mem49, unsigned char phase3) {
-    // unlike the other values, the pitches[] interpolates from 
-    // the middle of the current phoneme to the middle of the 
+static void interpolate_pitch(unsigned char pos, unsigned char mem49, unsigned char phase3)
+{
+    // unlike the other values, the pitches[] interpolates from
+    // the middle of the current phoneme to the middle of the
     // next phoneme
-        
+
     // half the width of the current and next phoneme
-    unsigned char cur_width  = phonemeLengthOutput[pos] / 2;
-    unsigned char next_width = phonemeLengthOutput[pos+1] / 2;
+    unsigned char cur_width = phonemeLengthOutput[pos] / 2;
+    unsigned char next_width = phonemeLengthOutput[pos + 1] / 2;
     // sum the values
     unsigned char width = cur_width + next_width;
-    char pitch = pitches[next_width + mem49] - pitches[mem49- cur_width];
+    char pitch = pitches[next_width + mem49] - pitches[mem49 - cur_width];
     interpolate(width, 168, phase3, pitch);
 }
 
-
 static unsigned char CreateTransitions()
 {
-	unsigned char mem49 = 0; 
-	unsigned char pos = 0;
-	while(1) {
-		unsigned char next_rank;
-		unsigned char rank;
-		unsigned char speedcounter;
-		unsigned char phase1;
-		unsigned char phase2;
-		unsigned char phase3;
-		unsigned char transition;
+    unsigned char mem49 = 0;
+    unsigned char pos = 0;
+    while (1) {
+        unsigned char next_rank;
+        unsigned char rank;
+        unsigned char speedcounter;
+        unsigned char phase1;
+        unsigned char phase2;
+        unsigned char phase3;
+        unsigned char transition;
 
-		unsigned char phoneme      = phonemeIndexOutput[pos];
-		unsigned char next_phoneme = phonemeIndexOutput[pos+1];
+        unsigned char phoneme = phonemeIndexOutput[pos];
+        unsigned char next_phoneme = phonemeIndexOutput[pos + 1];
 
-		if (next_phoneme == 255) break; // 255 == end_token
+        if (next_phoneme == 255) break; // 255 == end_token
 
         // get the ranking of each phoneme
-		next_rank = blendRank[next_phoneme];
-		rank      = blendRank[phoneme];
-		
-		// compare the rank - lower rank value is stronger
-		if (rank == next_rank) {
+        next_rank = blendRank[next_phoneme];
+        rank = blendRank[phoneme];
+
+        // compare the rank - lower rank value is stronger
+        if (rank == next_rank) {
             // same rank, so use out blend lengths from each phoneme
-			phase1 = outBlendLength[phoneme];
-			phase2 = outBlendLength[next_phoneme];
-		} else if (rank < next_rank) {
+            phase1 = outBlendLength[phoneme];
+            phase2 = outBlendLength[next_phoneme];
+        } else if (rank < next_rank) {
             // next phoneme is stronger, so us its blend lengths
-			phase1 = inBlendLength[next_phoneme];
-			phase2 = outBlendLength[next_phoneme];
-		} else {
+            phase1 = inBlendLength[next_phoneme];
+            phase2 = outBlendLength[next_phoneme];
+        } else {
             // current phoneme is stronger, so use its blend lengths
             // note the out/in are swapped
-			phase1 = outBlendLength[phoneme];
-			phase2 = inBlendLength[phoneme];
-		}
+            phase1 = outBlendLength[phoneme];
+            phase2 = inBlendLength[phoneme];
+        }
 
-		mem49 += phonemeLengthOutput[pos]; 
+        mem49 += phonemeLengthOutput[pos];
 
-		speedcounter = mem49 + phase2;
-		phase3       = mem49 - phase1;
-		transition   = phase1 + phase2; // total transition?
-		
-		if (((transition - 2) & 128) == 0) {
+        speedcounter = mem49 + phase2;
+        phase3 = mem49 - phase1;
+        transition = phase1 + phase2; // total transition?
+
+        if (((transition - 2) & 128) == 0) {
             unsigned char table = 169;
             interpolate_pitch(pos, mem49, phase3);
             while (table < 175) {
@@ -2422,31 +2183,17 @@ static unsigned char CreateTransitions()
                 // 172  amplitude1
                 // 173  amplitude2
                 // 174  amplitude3
-                
+
                 char value = Read(table, speedcounter) - Read(table, phase3);
                 interpolate(transition, table, phase3, value);
                 table++;
             }
         }
-		++pos;
-	} 
+        ++pos;
+    }
 
     // add the length of this phoneme
     return mem49 + phonemeLengthOutput[pos];
-}
-
-static void CombineGlottalAndFormants(unsigned char phase1, unsigned char phase2, unsigned char phase3, unsigned char Y)
-{
-    unsigned int tmp;
-
-    tmp   = multtable[sinus[phase1]     | amplitude1[Y]];
-    tmp  += multtable[sinus[phase2]     | amplitude2[Y]];
-    tmp  += tmp > 255 ? 1 : 0; // if addition above overflows, we for some reason add one;
-    tmp  += multtable[rectangle[phase3] | amplitude3[Y]];
-    tmp  += 136;
-    tmp >>= 4; // Scale down to 0..15 range of C64 audio.
-            
-    Output(0, tmp & 0xf);
 }
 
 // PROCESS THE FRAMES
@@ -2461,100 +2208,125 @@ static void CombineGlottalAndFormants(unsigned char phase1, unsigned char phase2
 static void ProcessFrames(unsigned char mem48)
 {
     unsigned char speedcounter = 72;
-	unsigned char phase1 = 0;
+    unsigned char phase1 = 0;
     unsigned char phase2 = 0;
-	unsigned char phase3 = 0;
+    unsigned char phase3 = 0;
     unsigned char mem66 = 0; //!! was not initialized
-    
+
     unsigned char Y = 0;
 
     unsigned char glottal_pulse = pitches[0];
     unsigned char mem38 = glottal_pulse - (glottal_pulse >> 2); // mem44 * 0.75
 
-	while(mem48) {
-		unsigned char flags = sampledConsonantFlag[Y];
-		
-		// unvoiced sampled phoneme?
-        if(flags & 248) {
-			RenderSample(&mem66, flags,Y);
-			// skip ahead two in the phoneme buffer
-			Y += 2;
-			mem48 -= 2;
-            speedcounter = speed;
-		} else {
-            CombineGlottalAndFormants(phase1, phase2, phase3, Y);
+    while (mem48) {
+        unsigned char flags = sampledConsonantFlag[Y];
 
-			speedcounter--;
-			if (speedcounter == 0) { 
-                Y++; //go to next amplitude
+        // unvoiced sampled phoneme?
+        if (flags & 248) {
+            RenderSample(&mem66, flags, Y);
+            // skip ahead two in the phoneme buffer
+            Y += 2;
+            mem48 -= 2;
+            speedcounter = speed;
+        } else {
+            // simulate the glottal pulse and formants
+            unsigned char ary[5];
+            unsigned int p1 = phase1 * 256; // Fixed point integers because we need to divide later on
+            unsigned int p2 = phase2 * 256;
+            unsigned int p3 = phase3 * 256;
+            int k;
+            for (k = 0; k < 5; k++) {
+                signed char sp1 = (signed char)sinetable[0xff & (p1 >> 8)];
+                signed char sp2 = (signed char)sinetable[0xff & (p2 >> 8)];
+                signed char rp3 = (signed char)rectangle[0xff & (p3 >> 8)];
+                signed int sin1 = sp1 * ((unsigned char)amplitude1[Y] & 0x0f);
+                signed int sin2 = sp2 * ((unsigned char)amplitude2[Y] & 0x0f);
+                signed int rect = rp3 * ((unsigned char)amplitude3[Y] & 0x0f);
+                signed int mux = sin1 + sin2 + rect;
+                mux /= 32;
+                mux += 128; // Go from signed to unsigned amplitude
+                ary[k] = mux;
+                p1 += frequency1[Y] * 256 / 4;
+                p2 += frequency2[Y] * 256 / 4;
+                p3 += frequency3[Y] * 256 / 4;
+            }
+            // output the accumulated value
+            Output8BitAry(0, ary);
+
+            speedcounter--;
+            if (speedcounter == 0) {
+                Y++; // go to next amplitude
                 // decrement the frame count
                 mem48--;
-                if(mem48 == 0) return;
+                if (mem48 == 0) return;
                 speedcounter = speed;
             }
-         
+
             --glottal_pulse;
-		
-            if(glottal_pulse != 0) {
+
+            if (glottal_pulse != 0) {
                 // not finished with a glottal pulse
 
                 --mem38;
                 // within the first 75% of the glottal pulse?
                 // is the count non-zero and the sampled flag is zero?
-                if((mem38 != 0) || (flags == 0)) {
+                if ((mem38 != 0) || (flags == 0)) {
                     // reset the phase of the formants to match the pulse
                     phase1 += frequency1[Y];
                     phase2 += frequency2[Y];
                     phase3 += frequency3[Y];
                     continue;
                 }
-                
+
                 // voiced sampled phonemes interleave the sample with the
                 // glottal pulse. The sample flag is non-zero, so render
                 // the sample for the phoneme.
-                RenderSample(&mem66, flags,Y);
+                RenderSample(&mem66, flags, Y);
             }
         }
 
         glottal_pulse = pitches[Y];
-        mem38 = glottal_pulse - (glottal_pulse>>2); // mem44 * 0.75
+        mem38 = glottal_pulse - (glottal_pulse >> 2); // mem44 * 0.75
 
-        // reset the formant wave generators to keep them in 
+        // reset the formant wave generators to keep them in
         // sync with the glottal pulse
         phase1 = 0;
         phase2 = 0;
         phase3 = 0;
-	}
+    }
 }
 
-
-
-// Create a rising or falling inflection 30 frames prior to 
-// index X. A rising inflection is used for questions, and 
+// Create a rising or falling inflection 30 frames prior to
+// index X. A rising inflection is used for questions, and
 // a falling inflection is used for statements.
-
-void AddInflection(unsigned char inflection, unsigned char pos)
+static void AddInflection(unsigned char inflection, unsigned char pos)
 {
     unsigned char A;
     // store the location of the punctuation
-	unsigned char end = pos;
+    unsigned char end = pos;
 
-    if (pos < 30) pos = 0;
-    else pos -= 30;
+    if (pos < 30) {
+        pos = 0;
+    } else {
+        pos -= 30;
+    }
 
-	// FIXME: Explain this fix better, it's not obvious
-	// ML : A =, fixes a problem with invalid pitch with '.'
-	while( (A = pitches[pos]) == 127) ++pos;
+    // FIXME: Explain this fix better, it's not obvious
+    // ML : A =, fixes a problem with invalid pitch with '.'
+    while ((A = pitches[pos]) == 127) {
+        ++pos;
+    }
 
     while (pos != end) {
         // add the inflection direction
         A += inflection;
-	
+
         // set the inflection
         pitches[pos] = A;
 
-        while ((++pos != end) && pitches[pos] == 255);
-    } 
+        while ((++pos != end) && pitches[pos] == 255)
+            ;
+    }
 }
 
 /*
@@ -2562,240 +2334,241 @@ void AddInflection(unsigned char inflection, unsigned char pos)
     mouth formant (F1) and the throat formant (F2). Only the voiced
     phonemes (5-29 and 48-53) are altered.
 */
-void SetMouthThroat(unsigned char mouth, unsigned char throat)
+static void SetMouthThroat(unsigned char mouth, unsigned char throat)
 {
-	// mouth formants (F1) 5..29
-	static const unsigned char mouthFormants5_29[30] = {
-		0, 0, 0, 0, 0, 10,
-		14, 19, 24, 27, 23, 21, 16, 20, 14, 18, 14, 18, 18,
-		16, 13, 15, 11, 18, 14, 11, 9, 6, 6, 6};
-
-	// throat formants (F2) 5..29
-	static const unsigned char throatFormants5_29[30] = {
-	255, 255,
-	255, 255, 255, 84, 73, 67, 63, 40, 44, 31, 37, 45, 73, 49,
-	36, 30, 51, 37, 29, 69, 24, 50, 30, 24, 83, 46, 54, 86,
+    // mouth formants (F1) 5..29
+    static const unsigned char mouthFormants5_29[30] = {
+        0, 0, 0, 0, 0, 10,
+        14, 19, 24, 27, 23, 21, 16, 20, 14, 18, 14, 18, 18,
+        16, 13, 15, 11, 18, 14, 11, 9, 6, 6, 6
     };
 
-	// there must be no zeros in this 2 tables
-	// formant 1 frequencies (mouth) 48..53
-	static const unsigned char mouthFormants48_53[6] = {19, 27, 21, 27, 18, 13};
-       
-	// formant 2 frequencies (throat) 48..53
-	static const unsigned char throatFormants48_53[6] = {72, 39, 31, 43, 30, 34};
+    // throat formants (F2) 5..29
+    static const unsigned char throatFormants5_29[30] = {
+        255, 255,
+        255, 255, 255, 84, 73, 67, 63, 40, 44, 31, 37, 45, 73, 49,
+        36, 30, 51, 37, 29, 69, 24, 50, 30, 24, 83, 46, 54, 86
+    };
 
-	unsigned char newFrequency = 0;
-	unsigned char pos = 5;
+    // there must be no zeros in this 2 tables
+    // formant 1 frequencies (mouth) 48..53
+    static const unsigned char mouthFormants48_53[6] = { 19, 27, 21, 27, 18, 13 };
 
-	// recalculate formant frequencies 5..29 for the mouth (F1) and throat (F2)
-	while(pos < 30)
-	{
-		// recalculate mouth frequency
-		unsigned char initialFrequency = mouthFormants5_29[pos];
-		if (initialFrequency != 0) newFrequency = trans(mouth, initialFrequency);
-		freq1data[pos] = newFrequency;
-               
-		// recalculate throat frequency
-		initialFrequency = throatFormants5_29[pos];
-		if(initialFrequency != 0) newFrequency = trans(throat, initialFrequency);
-		freq2data[pos] = newFrequency;
-		pos++;
-	}
+    // formant 2 frequencies (throat) 48..53
+    static const unsigned char throatFormants48_53[6] = { 72, 39, 31, 43, 30, 34 };
 
-	// recalculate formant frequencies 48..53
-	pos = 0;
-    while(pos < 6) {
-		// recalculate F1 (mouth formant)
-		unsigned char initialFrequency = mouthFormants48_53[pos];
-		freq1data[pos+48] = trans(mouth, initialFrequency);
-           
-		// recalculate F2 (throat formant)
-		initialFrequency = throatFormants48_53[pos];
-		freq2data[pos+48] = trans(throat, initialFrequency);
-		pos++;
-	}
+    unsigned char newFrequency = 0;
+    unsigned char pos = 5;
+
+    // recalculate formant frequencies 5..29 for the mouth (F1) and throat (F2)
+    while (pos < 30) {
+        // recalculate mouth frequency
+        unsigned char initialFrequency = mouthFormants5_29[pos];
+        if (initialFrequency != 0) newFrequency = trans(mouth, initialFrequency);
+        freq1data[pos] = newFrequency;
+
+        // recalculate throat frequency
+        initialFrequency = throatFormants5_29[pos];
+        if (initialFrequency != 0) newFrequency = trans(throat, initialFrequency);
+        freq2data[pos] = newFrequency;
+        pos++;
+    }
+
+    // recalculate formant frequencies 48..53
+    pos = 0;
+    while (pos < 6) {
+        // recalculate F1 (mouth formant)
+        unsigned char initialFrequency = mouthFormants48_53[pos];
+        freq1data[pos + 48] = trans(mouth, initialFrequency);
+
+        // recalculate F2 (throat formant)
+        initialFrequency = throatFormants48_53[pos];
+        freq2data[pos + 48] = trans(throat, initialFrequency);
+        pos++;
+    }
 }
-
-unsigned char A, X;
-
-static unsigned char inputtemp[256];   // secure copy of input tab36096
 
 /* Retrieve flags for character at mem59-1 */
-unsigned char Code37055(unsigned char npos, unsigned char mask)
+static unsigned char getParserFlag(unsigned char npos, unsigned char mask)
 {
-	X = npos;
-	return tab36376[inputtemp[X]] & mask;
+    return parser_flags[inputtemp[npos]] & mask;
 }
 
-unsigned int match(const char * str) {
+static unsigned int match(unsigned char* X, const char* str)
+{
     while (*str) {
         unsigned char ch = *str;
-        A = inputtemp[X++];
+        unsigned char A = inputtemp[(*X)++];
         if (A != ch) return 0;
         ++str;
     }
     return 1;
 }
 
-unsigned char GetRuleByte(unsigned short mem62, unsigned char Y) {
-	unsigned int address = mem62;
-	if (mem62 >= 37541) {
-		address -= 37541;
-		return rules2[address+Y];
-	}
-	address -= 32000;
-	return rules[address+Y];
+static unsigned char GetRuleByte(unsigned short mem62, unsigned char Y)
+{
+    unsigned int address = mem62;
+    if (mem62 >= 37541) {
+        address -= 37541;
+        return rules2[address + Y];
+    }
+    address -= 32000;
+    return rules[address + Y];
 }
 
-int handle_ch2(unsigned char ch, unsigned char mem) {
+static int handle_ch2(unsigned char ch, unsigned char mem)
+{
     unsigned char tmp;
-    X = mem;
-    tmp = tab36376[inputtemp[mem]];
+    tmp = parser_flags[inputtemp[mem]];
     if (ch == ' ') {
-        if(tmp & 128) return 1;
+        if (tmp & 128) return 1;
     } else if (ch == '#') {
-        if(!(tmp & 64)) return 1;
+        if (!(tmp & 64)) return 1;
     } else if (ch == '.') {
-        if(!(tmp & 8)) return 1;
+        if (!(tmp & 8)) return 1;
     } else if (ch == '^') {
-        if(!(tmp & 32)) return 1;
-    } else return -1;
+        if (!(tmp & 32)) return 1;
+    } else
+        return -1;
     return 0;
 }
 
-
-int handle_ch(unsigned char ch, unsigned char mem) {
+static int handle_ch(unsigned char ch, unsigned char* mem)
+{
     unsigned char tmp;
-    X = mem;
-    tmp = tab36376[inputtemp[X]];
+    tmp = parser_flags[inputtemp[*mem]];
     if (ch == ' ') {
         if ((tmp & 128) != 0) return 1;
     } else if (ch == '#') {
         if ((tmp & 64) == 0) return 1;
     } else if (ch == '.') {
-        if((tmp & 8) == 0) return 1;
+        if ((tmp & 8) == 0) return 1;
     } else if (ch == '&') {
-        if((tmp & 16) == 0) {
-            if (inputtemp[X] != 72) return 1;
-            ++X;
+        if ((tmp & 16) == 0) {
+            if (inputtemp[*mem] != 72) return 1;
+            (*mem)++;
         }
     } else if (ch == '^') {
         if ((tmp & 32) == 0) return 1;
     } else if (ch == '+') {
-        X = mem;
-        ch = inputtemp[X];
+        ch = inputtemp[*mem];
         if ((ch != 69) && (ch != 73) && (ch != 89)) return 1;
-    } else return -1;
+    } else
+        return -1;
     return 0;
 }
 
+int TextToPhonemes(unsigned char* input)
+{
+    unsigned char mem56; // output position for phonemes
+    unsigned char mem57;
+    unsigned char mem58;
+    unsigned char mem59;
+    unsigned char mem60;
+    unsigned char mem61;
+    unsigned short mem62; // memory position of current rule
 
-int TextToPhonemes(unsigned char *input) {
-	unsigned char mem56;      //output position for phonemes
-	unsigned char mem57;
-	unsigned char mem58;
-	unsigned char mem59;
-	unsigned char mem60;
-	unsigned char mem61;
-	unsigned short mem62;     // memory position of current rule
+    unsigned char mem64; // position of '=' or current character
+    unsigned char mem65; // position of ')'
+    unsigned char mem66; // position of '('
 
-	unsigned char mem64;      // position of '=' or current character
-	unsigned char mem65;     // position of ')'
-	unsigned char mem66;     // position of '('
+    unsigned char A;
+    unsigned char X;
+    unsigned char Y;
 
-	unsigned char Y;
+    int r;
 
-	int r;
+    inputtemp[0] = ' ';
 
-	inputtemp[0] = ' ';
-
-	// secure copy of input
-	// because input will be overwritten by phonemes
-	X = 0;
-	do {
-		A = input[X] & 127;
-		if ( A >= 112) A = A & 95;
-		else if ( A >= 96) A = A & 79;
-		inputtemp[++X] = A;
-	} while (X < 255);
-	inputtemp[255] = 27;
-	mem56 = mem61 = 255;
+    // secure copy of input
+    // because input will be overwritten by phonemes
+    X = 0;
+    do {
+        A = input[X] & 127;
+        if (A >= 112) {
+            A = A & 95;
+        } else if (A >= 96) {
+            A = A & 79;
+        }
+        inputtemp[++X] = A;
+    } while (X < 255);
+    inputtemp[255] = 27;
+    mem56 = mem61 = 255;
 
 pos36554:
     while (1) {
-        while(1) {
+        while (1) {
             X = ++mem61;
             mem64 = inputtemp[X];
             if (mem64 == '[') {
                 X = ++mem56;
-                input[X] = 155;
+                input[X] = EOL;
                 return 1;
             }
-            
+
             if (mem64 != '.') break;
             X++;
-            A = tab36376[inputtemp[X]] & 1;
-            if(A != 0) break;
+            A = parser_flags[inputtemp[X]] & 1;
+            if (A != 0) break;
             mem56++;
             X = mem56;
             A = '.';
             input[X] = '.';
         }
-        mem57 = tab36376[mem64];
-        if((mem57&2) != 0) {
+        mem57 = parser_flags[mem64];
+        if ((mem57 & 2) != 0) {
             mem62 = 37541;
             goto pos36700;
         }
-        
-        if(mem57 != 0) break;
+
+        if (mem57 != 0) break;
         inputtemp[X] = ' ';
         X = ++mem56;
         if (X > 120) {
-            input[X] = 155;
+            input[X] = EOL;
             return 1;
         }
         input[X] = 32;
     }
 
-    if(!(mem57 & 128)) return 0;
+    if (!(mem57 & 128)) return 0;
 
-	// go to the right rules for this character.
+    // go to the right rules for this character.
     X = mem64 - 'A';
-    mem62 = tab37489[X] | (tab37515[X]<<8);
+    mem62 = tab37489[X] | (tab37515[X] << 8);
 
 pos36700:
-	// find next rule
-	while ((GetRuleByte(++mem62, 0) & 128) == 0)
+    // find next rule
+    while ((GetRuleByte(++mem62, 0) & 128) == 0)
         ;
-	Y = 0;
-	while(GetRuleByte(mem62, ++Y) != '(')
+    Y = 0;
+    while (GetRuleByte(mem62, ++Y) != '(')
         ;
-	mem66 = Y;
-    while(GetRuleByte(mem62, ++Y) != ')')
+    mem66 = Y;
+    while (GetRuleByte(mem62, ++Y) != ')')
         ;
-	mem65 = Y;
-	while((GetRuleByte(mem62, ++Y) & 127) != '=')
+    mem65 = Y;
+    while ((GetRuleByte(mem62, ++Y) & 127) != '=')
         ;
-	mem64 = Y;
+    mem64 = Y;
 
-	
-	mem60 = X = mem61;
-	// compare the string within the bracket
-	Y = mem66 + 1;
+    mem60 = X = mem61;
+    // compare the string within the bracket
+    Y = mem66 + 1;
 
-	while(1) {
-		if (GetRuleByte(mem62, Y) != inputtemp[X]) goto pos36700;
-		if(++Y == mem65) break;
-		mem60 = ++X;
-	}
+    while (1) {
+        if (GetRuleByte(mem62, Y) != inputtemp[X]) goto pos36700;
+        if (++Y == mem65) break;
+        mem60 = ++X;
+    }
 
     // the string in the bracket is correct
 
-	mem59 = mem61;
+    mem59 = mem61;
 
-    while(1) {
-		unsigned char ch;
-		while(1) {
+    while (1) {
+        unsigned char ch;
+        while (1) {
             mem66--;
             mem57 = GetRuleByte(mem62, mem66);
             if ((mem57 & 128) != 0) {
@@ -2803,43 +2576,48 @@ pos36700:
                 goto pos37184;
             }
             X = mem57 & 127;
-            if ((tab36376[X] & 128) == 0) break;
-            if (inputtemp[mem59-1] != mem57) goto pos36700;
+            if ((parser_flags[X] & 128) == 0) break;
+            if (inputtemp[mem59 - 1] != mem57) goto pos36700;
             --mem59;
         }
 
         ch = mem57;
 
-        r = handle_ch2(ch, mem59-1);
+        X = mem59 - 1;
+        r = handle_ch2(ch, X);
         if (r == -1) {
             switch (ch) {
-            case '&':
-                if (!Code37055(mem59-1,16)) {
-                    if (inputtemp[X] != 'H') r = 1;
-                    else {
-                        A = inputtemp[--X];
-                        if ((A != 'C') && (A != 'S')) r = 1;
+                case '&':
+                    X = mem59 - 1;
+                    if (!getParserFlag(X, 16)) {
+                        if (inputtemp[X] != 'H')
+                            r = 1;
+                        else {
+                            A = inputtemp[--X];
+                            if ((A != 'C') && (A != 'S')) r = 1;
+                        }
                     }
-                }
-                break;
-                
-            case '@':
-                if(!Code37055(mem59-1,4)) { 
-                    A = inputtemp[X];
-                    if (A != 72) r = 1;
-                    if ((A != 84) && (A != 67) && (A != 83)) r = 1;
-                }
-                break;
-            case '+':
-                X = mem59;
-                A = inputtemp[--X];
-                if ((A != 'E') && (A != 'I') && (A != 'Y')) r = 1;
-                break;
-            case ':':
-                while (Code37055(mem59-1,32)) --mem59;
-                continue;
-            default:
-                return 0;
+                    break;
+
+                case '@':
+                    X = mem59 - 1;
+                    if (!getParserFlag(X, 4)) {
+                        A = inputtemp[X];
+                        if (A != 72) r = 1;
+                        if ((A != 84) && (A != 67) && (A != 83)) r = 1;
+                    }
+                    break;
+                case '+':
+                    X = mem59;
+                    A = inputtemp[--X];
+                    if ((A != 'E') && (A != 'I') && (A != 'Y')) r = 1;
+                    break;
+                case ':':
+                    while (getParserFlag(mem59 - 1, 32))
+                        --mem59;
+                    continue;
+                default:
+                    return 0;
             }
         }
 
@@ -2849,28 +2627,29 @@ pos36700:
     }
 
     do {
-        X = mem58+1;
+        X = mem58 + 1;
         if (inputtemp[X] == 'E') {
-            if((tab36376[inputtemp[X+1]] & 128) != 0) {
+            if ((parser_flags[inputtemp[X + 1]] & 128) != 0) {
                 A = inputtemp[++X];
                 if (A == 'L') {
                     if (inputtemp[++X] != 'Y') goto pos36700;
-                } else if ((A != 'R') && (A != 'S') && (A != 'D') && !match("FUL")) goto pos36700;
+                } else if ((A != 'R') && (A != 'S') && (A != 'D') && !match(&X, "FUL"))
+                    goto pos36700;
             }
         } else {
-            if (!match("ING")) goto pos36700;
+            if (!match(&X, "ING")) goto pos36700;
             mem58 = X;
         }
-        
-pos37184:
+
+    pos37184:
         r = 0;
         do {
             while (1) {
                 Y = mem65 + 1;
-                if(Y == mem64) {
+                if (Y == mem64) {
                     mem61 = mem60;
-                    
-                    while(1) {
+
+                    while (1) {
                         mem57 = A = GetRuleByte(mem62, Y);
                         A = A & 127;
                         if (A != '=') input[++mem56] = A;
@@ -2880,8 +2659,8 @@ pos37184:
                 }
                 mem65 = Y;
                 mem57 = GetRuleByte(mem62, Y);
-                if((tab36376[mem57] & 128) == 0) break;
-                if (inputtemp[mem58+1] != mem57) {
+                if ((parser_flags[mem57] & 128) == 0) break;
+                if (inputtemp[mem58 + 1] != mem57) {
                     r = 1;
                     break;
                 }
@@ -2891,26 +2670,32 @@ pos37184:
             if (r == 0) {
                 A = mem57;
                 if (A == '@') {
-                    if(Code37055(mem58+1, 4) == 0) {
+                    X = mem58 + 1;
+                    if (getParserFlag(X, 4) == 0) {
                         A = inputtemp[X];
-                        if ((A != 82) && (A != 84) && 
-                            (A != 67) && (A != 83)) r = 1;
+                        if ((A != 82) && (A != 84) && (A != 67) && (A != 83)) r = 1;
                     } else {
                         r = -2;
                     }
                 } else if (A == ':') {
-                    while (Code37055(mem58+1, 32)) mem58 = X;
+                    X = mem58 + 1;
+                    while (getParserFlag(X, 32)) {
+                        mem58 = X;
+                    }
                     r = -2;
-                } else r = handle_ch(A, mem58+1);
+                } else {
+                    X = mem58 + 1;
+                    r = handle_ch(A, &X);
+                }
             }
 
             if (r == 1) goto pos36700;
-            if (r == -2) { 
+            if (r == -2) {
                 r = 0;
                 continue;
             }
             if (r == 0) mem58 = X;
         } while (r == 0);
     } while (A == '%');
-	return 0;
+    return 0;
 }
