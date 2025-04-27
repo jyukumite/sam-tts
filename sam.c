@@ -39,7 +39,7 @@ static unsigned char amplitude3[256];
 static unsigned char sampledConsonantFlag[256]; // tab44800
 
 static unsigned char* input;
-static unsigned char inputtemp[256]; // copy of input during rendering
+static unsigned char* inputtemp; // copy of input during rendering
 
 // standard sam sound
 static unsigned char speed = 72;
@@ -2478,6 +2478,8 @@ int TextToPhonemes(unsigned char* input)
 
     int r;
 
+    unsigned char inputtempbuf[256];
+    inputtemp = inputtempbuf;
     inputtemp[0] = ' ';
 
     // secure copy of input
