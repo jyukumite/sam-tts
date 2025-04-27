@@ -7,7 +7,7 @@
 
 #include "sam.h"
 
-void WriteWav(char* buffer, int bufferlength)
+void WriteWav(unsigned char* buffer, int bufferlength)
 {
     FILE* file = stdout;
     if (file == NULL) return;
@@ -84,6 +84,14 @@ void PrintUsage(void)
         "Q            kitt-en (glottal stop)    /H        a(h)ead\n");
 }
 
+static unsigned char buffer[22 * 11050];
+static unsigned char* buffer_ptr = buffer;
+
+void outputSample(unsigned char sample)
+{
+    *buffer_ptr++ = sample;
+}
+
 int main(int argc, char** argv)
 {
     int i;
@@ -149,14 +157,14 @@ int main(int argc, char** argv)
         fprintf(stderr, "phonetic output: %*s\n", (int)(eos - input), input);
     }
 
-    SetSAMInputFull(input, speed, pitch, mouth, throat);
+    SetSAMInputFull((unsigned char*)input, speed, pitch, mouth, throat);
 
-    if (!SAMMain()) {
+    if (!SAMMain(outputSample)) {
         fprintf(stderr, "SAMMain returned fail\n");
         PrintUsage();
         return 1;
     }
 
-    WriteWav(GetBuffer(), GetBufferLength());
+    WriteWav(buffer, buffer_ptr - buffer);
     return 0;
 }

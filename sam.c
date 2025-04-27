@@ -56,8 +56,11 @@ static unsigned char stressOutput[60]; // tab47365
 static unsigned char phonemeLengthOutput[60]; // tab47416
 
 // contains the final soundbuffer
-static int bufferpos = 0;
-static char* buffer = NULL;
+static unsigned char buffer[5];
+static unsigned oldtimetableindex = 0;
+
+static unsigned bufferpos_sub = 0;
+static output_sample_fn outputSample_fn;
 
 // Used to decide which phoneme's blend lengths. The candidate with the lower score is selected.
 // tab45856
@@ -231,42 +234,6 @@ static const signed char sinetable[256] = {
     -49, -46, -43, -40, -37, -34, -31, -28, -25, -22, -19, -16, -12, -9, -6, -3
 };
 
-// tab42496
-static const unsigned char rectangle[] = {
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70
-};
-
 // random data ?
 static const unsigned char sampleTable[0x500] = {
     0x38, 0x84, 0x6B, 0x19, 0xC6, 0x63, 0x18, 0x86, 0x73, 0x98, 0xC6, 0xB1, 0x1C, 0xCA, 0x31, 0x8C,
@@ -420,7 +387,6 @@ static const unsigned short flags[] = {
     0x00C1
 };
 
-// tab45616???
 static const unsigned char phonemeStressedLengthTable[] = {
     0x00, 0x12, 0x12, 0x12, 8, 0xB, 9, 0xB,
     0xE, 0xF, 0xB, 0x10, 0xC, 6, 6, 0xE,
@@ -434,7 +400,6 @@ static const unsigned char phonemeStressedLengthTable[] = {
     7, 2, 4, 7, 1, 4, 5, 5
 };
 
-// tab45536???
 static const unsigned char phonemeLengthTable[] = {
     0, 0x12, 0x12, 0x12, 8, 8, 8, 8,
     8, 0xB, 6, 0xC, 0xA, 5, 5, 0xB,
@@ -1100,16 +1065,6 @@ static const unsigned char tab37515[] = {
     140, 140
 };
 
-char* GetBuffer()
-{
-    return buffer;
-};
-
-int GetBufferLength()
-{
-    return bufferpos / 50;
-}
-
 void SetSAMInputFull(unsigned char* _input, unsigned char _speed, unsigned char _pitch, unsigned char _mouth, unsigned char _throat)
 {
     input = _input;
@@ -1124,11 +1079,9 @@ static void Init()
     int i;
     SetMouthThroat(mouth, throat);
 
-    bufferpos = 0;
-    // TODO, check for free the memory, 10 seconds of output should be more than enough
-    const int buffersize = 22050 * 10; // fixme: test for overflow
-    buffer = malloc(buffersize);
-    memset(buffer, 0, buffersize);
+    bufferpos_sub = 0;
+    memset(buffer, 0, sizeof(buffer));
+    oldtimetableindex = 0;
 
     for (i = 0; i < 256; i++) {
         stress[i] = 0;
@@ -1144,8 +1097,9 @@ static void Init()
     phonemeindex[255] = END;
 }
 
-int SAMMain()
+int SAMMain(output_sample_fn outputSample)
 {
+    outputSample_fn = outputSample;
     Init();
 
     if (!Parser1()) return 0;
@@ -1166,7 +1120,7 @@ int SAMMain()
     return 1;
 }
 
-void PrepareOutput()
+static void PrepareOutput()
 {
     unsigned char srcpos = 0; // Position in source
     unsigned char destpos = 0; // Position in output
@@ -1195,7 +1149,7 @@ void PrepareOutput()
     }
 }
 
-void InsertBreath()
+static void InsertBreath()
 {
     unsigned char mem54 = 255;
     unsigned char len = 0;
@@ -1239,7 +1193,7 @@ void InsertBreath()
 // of 5 on the dipthong OY. This routine will copy the stress value of 6 (5+1)
 // to the L that precedes it.
 
-void CopyStress()
+static void CopyStress()
 {
     // loop thought all the phonemes to be output
     unsigned char pos = 0; // mem66
@@ -1265,7 +1219,7 @@ void CopyStress()
     }
 }
 
-void Insert(unsigned char position /*var57*/, unsigned char mem60, unsigned char mem59, unsigned char mem58)
+static void Insert(unsigned char position /*var57*/, unsigned char mem60, unsigned char mem59, unsigned char mem58)
 {
     int i;
     for (i = 253; i >= position; i--) // ML : always keep last safe-guarding 255
@@ -1280,7 +1234,7 @@ void Insert(unsigned char position /*var57*/, unsigned char mem60, unsigned char
     stress[position] = mem58;
 }
 
-signed int full_match(unsigned char sign1, unsigned char sign2)
+static signed int full_match(unsigned char sign1, unsigned char sign2)
 {
     unsigned char Y = 0;
     do {
@@ -1297,7 +1251,7 @@ signed int full_match(unsigned char sign1, unsigned char sign2)
     return -1;
 }
 
-signed int wild_match(unsigned char sign1)
+static signed int wild_match(unsigned char sign1)
 {
     signed int Y = 0;
     do {
@@ -1359,7 +1313,7 @@ signed int wild_match(unsigned char sign1)
 // The character <0x9B> marks the end of text in input[]. When it is reached,
 // the index 255 is placed at the end of the phonemeIndexTable[], and the
 // function returns with a 1 indicating success.
-int Parser1()
+static int Parser1()
 {
     unsigned char sign1;
     unsigned char position = 0;
@@ -1636,7 +1590,7 @@ static void Parser2()
 //         <VOICED STOP CONSONANT> {optional silence} <STOP CONSONANT> - shorten both to 1/2 + 1
 //         <LIQUID CONSONANT> <DIPTHONG> - decrease by 2
 //
-void AdjustLengths()
+static void AdjustLengths()
 {
     // LENGTHEN VOWELS PRECEDING PUNCTUATION
     //
@@ -1758,7 +1712,7 @@ static unsigned char trans(unsigned char a, unsigned char b)
 }
 
 // timetable for more accurate c64 simulation
-static const int timetable[5][5] = {
+static const unsigned char timetable[5][5] = {
     { 162, 167, 167, 127, 128 },
     { 226, 60, 60, 0, 0 },
     { 225, 60, 59, 0, 0 },
@@ -1766,16 +1720,16 @@ static const int timetable[5][5] = {
     { 199, 0, 0, 54, 54 }
 };
 
-static unsigned oldtimetableindex = 0;
-
 static void Output8BitAry(int index, unsigned char ary[5])
 {
-    int k;
-    bufferpos += timetable[oldtimetableindex][index];
+    bufferpos_sub += timetable[oldtimetableindex][index];
+    while (bufferpos_sub >= 50) {
+        outputSample_fn(buffer[0]);
+        memmove(buffer, buffer + 1, sizeof(buffer) - 1);
+        bufferpos_sub -= 50;
+    }
     oldtimetableindex = index;
-    // write a little bit in advance, to make up for larger steps
-    for (k = 0; k < 5; k++)
-        buffer[bufferpos / 50 + k] = ary[k];
+    memcpy(buffer, ary, sizeof(buffer));
 }
 
 static void Output8Bit(int index, unsigned char A)
@@ -1872,7 +1826,7 @@ static void RenderUnvoicedSample(unsigned short hi, unsigned char off, unsigned 
 //
 // For voices samples, samples are interleaved between voiced output.
 
-void RenderSample(unsigned char* mem66, unsigned char consonantFlag, unsigned char mem49)
+static void RenderSample(unsigned char* mem66, unsigned char consonantFlag, unsigned char mem49)
 {
     // mem49 == current phoneme's index
 
@@ -2090,14 +2044,20 @@ static void Write(unsigned char p, unsigned char Y, unsigned char value)
 static void interpolate(unsigned char width, unsigned char table, unsigned char frame, char mem53)
 {
     unsigned char sign = (mem53 < 0);
-    unsigned char remainder = abs(mem53) % width;
-    unsigned char div = mem53 / width;
-
     unsigned char error = 0;
     unsigned char pos = width;
-    unsigned char val = Read(table, frame) + div;
 
+    unsigned char remainder = sign ? -mem53 : mem53;
+    unsigned char div = 0;
+
+    while (remainder >= width) { // 43% 0 loops, 60% <=1, 70% <= 2, 99% <= 8, highest 21
+        remainder -= width;
+        div++;
+    }
+
+    unsigned char val = Read(table, frame);
     while (--pos) {
+        val += sign ? -div : div;
         error += remainder;
         if (error >= width) { // accumulated a whole integer error, so adjust output
             error -= width;
@@ -2108,7 +2068,6 @@ static void interpolate(unsigned char width, unsigned char table, unsigned char 
             }
         }
         Write(table, ++frame, val); // Write updated value back to next frame.
-        val += div;
     }
 }
 
@@ -2238,7 +2197,7 @@ static void ProcessFrames(unsigned char mem48)
             for (k = 0; k < 5; k++) {
                 signed char sp1 = (signed char)sinetable[0xff & (p1 >> 8)];
                 signed char sp2 = (signed char)sinetable[0xff & (p2 >> 8)];
-                signed char rp3 = (signed char)rectangle[0xff & (p3 >> 8)];
+                signed char rp3 = p3 & 0x8000 ? 0x70 : 0x90;
                 signed int sin1 = sp1 * ((unsigned char)amplitude1[Y] & 0x0f);
                 signed int sin2 = sp2 * ((unsigned char)amplitude2[Y] & 0x0f);
                 signed int rect = rp3 * ((unsigned char)amplitude3[Y] & 0x0f);

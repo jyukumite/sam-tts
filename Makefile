@@ -1,8 +1,20 @@
 OBJS = sam.o main.o
 
 CC = gcc
-CFLAGS = -Wall -Os
+STMCC = "c:/Program Files (x86)/GNU Arm Embedded Toolchain/10 2021.10/bin/arm-none-eabi-gcc"
+STMOBJCOPY = "c:/Program Files (x86)/GNU Arm Embedded Toolchain/10 2021.10/bin/arm-none-eabi-objcopy"
+STMOBJDUMP = "c:/Program Files (x86)/GNU Arm Embedded Toolchain/10 2021.10/bin/arm-none-eabi-objdump"
+
+CFLAGS = -Wall -O3 -ffunction-sections -fdata-sections
 LFLAGS = 
+
+STMCFLAGS = -mcpu=cortex-m0plus -mthumb -mfloat-abi=soft -Os -ffunction-sections -fdata-sections -nostartfiles -Wl,--gc-sections -T stm32g070.ld -lc -lnosys -specs=nosys.specs -specs=nano.specs
+
+stm32g: $(OBJS)
+	$(STMCC) $(STMCFLAGS) -o firmware.elf emain.c sam.c
+	$(STMOBJCOPY) -O binary firmware.elf firmware.bin
+	$(STMOBJDUMP) -xsSt firmware.elf >firmware.dump
+
 
 sam: $(OBJS)
 	$(CC) -o sam $(OBJS) $(LFLAGS)
