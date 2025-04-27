@@ -27,7 +27,7 @@ It should compile on every UNIX-like operating system. For Windows you need Cygw
 Fork
 ====
 
-Take a look at https://github.com/vidarh/SAM for a more refactored and cleaner version of the code.
+Mix of https://github.com/vidarh/SAM and https://github.com/s-macke/SAM reduced for embedded application.
 
 Usage
 =====
