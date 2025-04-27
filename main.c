@@ -2,202 +2,161 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+#include <io.h>
+#include <fcntl.h>
 
-#include "reciter.h"
 #include "sam.h"
-#include "debug.h"
 
-#ifdef USESDL
-#include <SDL.h>
-#include <SDL_audio.h>
-#endif
-
-void WriteWav(char* filename, char* buffer, int bufferlength)
+void WriteWav(char* buffer, int bufferlength)
 {
-    FILE *file = fopen(filename, "wb");
+    FILE* file = stdout;
     if (file == NULL) return;
-    //RIFF header
-    fwrite("RIFF", 4, 1,file);
-    unsigned int filesize=bufferlength + 12 + 16 + 8 - 8;
+    _setmode(_fileno(stdout), _O_BINARY);
+
+    // RIFF header
+    fwrite("RIFF", 4, 1, file);
+    unsigned int filesize = bufferlength + 12 + 16 + 8 - 8;
     fwrite(&filesize, 4, 1, file);
     fwrite("WAVE", 4, 1, file);
 
-    //format chunk
+    // format chunk
     fwrite("fmt ", 4, 1, file);
     unsigned int fmtlength = 16;
     fwrite(&fmtlength, 4, 1, file);
-    unsigned short int format=1; //PCM
+    unsigned short int format = 1; // PCM
     fwrite(&format, 2, 1, file);
-    unsigned short int channels=1;
+    unsigned short int channels = 1;
     fwrite(&channels, 2, 1, file);
     unsigned int samplerate = 22050;
     fwrite(&samplerate, 4, 1, file);
     fwrite(&samplerate, 4, 1, file); // bytes/second
     unsigned short int blockalign = 1;
     fwrite(&blockalign, 2, 1, file);
-    unsigned short int bitspersample=8;
+    unsigned short int bitspersample = 8;
     fwrite(&bitspersample, 2, 1, file);
 
-    //data chunk
+    // data chunk
     fwrite("data", 4, 1, file);
     fwrite(&bufferlength, 4, 1, file);
     fwrite(buffer, bufferlength, 1, file);
-
-    fclose(file);
 }
 
-// usage: sam [options] Word1 Word2 ....
-// options
-//     -phonetic         enters phonetic mode. (see below)
-//     -pitch number        set pitch value (default=64)
-//     -speed number        set speed value (default=72)
-//     -throat number        set throat value (default=128)
-//     -mouth number        set mouth value (default=128)
-//     -wav filename        output to wav instead of libsdl
-//     -sing            special treatment of pitch
-//     -debug            print additional debug messages
-//      VOWELS                            VOICED CONSONANTS    
-// IY           f(ee)t                    R        red        
-// IH           p(i)n                     L        allow        
-// EH           beg                       W        away        
-// AE           Sam                       W        whale        
-// AA           pot                       Y        you        
-// AH           b(u)dget                  M        Sam        
-// AO           t(al)k                    N        man        
-// OH           cone                      NX       so(ng)        
-// UH           book                      B        bad        
-// UX           l(oo)t                    D        dog        
-// ER           bird                      G        again        
-// AX           gall(o)n                  J        judge        
-// IX           dig(i)t                   Z        zoo        
-//                        ZH       plea(s)ure    
-//    DIPHTHONGS                          V        seven        
-// EY           m(a)de                    DH       (th)en        
-// AY           h(igh)                        
-// OY           boy                        
-// AW           h(ow)                     UNVOICED CONSONANTS    
-// OW           slow                      S         Sam        
-// UW           crew                      Sh        fish        
-//                                        F         fish        
-//                                        TH        thin        
-//  SPECIAL PHONEMES                      P         poke        
-// UL           sett(le) (=AXL)           T         talk        
-// UM           astron(omy) (=AXM)        K         cake        
-// UN           functi(on) (=AXN)         CH        speech        
-// Q            kitt-en (glottal stop)    /H        a(h)ead    
+void PrintUsage(void)
+{
+    fprintf(stderr,
+        "usage: sam [options] Word1 Word2 .... >output.wav\n"
+        "options\n"
+        "    -phonetic         enters phonetic mode. (see below)\n"
+        "    -pitch number     set pitch value (default=64)\n"
+        "    -speed number     set speed value (default=72)\n"
+        "    -throat number    set throat value (default=128)\n"
+        "    -mouth number     set mouth value (default=128)\n"
+        "    -test             ignore input and emit test sequence\n"
+        "\n"
+        "     VOWELS                            VOICED CONSONANTS\n"
+        "IY           f(ee)t                    R        red\n"
+        "IH           p(i)n                     L        allow\n"
+        "EH           beg                       W        away\n"
+        "AE           Sam                       W        whale\n"
+        "AA           pot                       Y        you\n"
+        "AH           b(u)dget                  M        Sam\n"
+        "AO           t(al)k                    N        man\n"
+        "OH           cone                      NX       so(ng)\n"
+        "UH           book                      B        bad\n"
+        "UX           l(oo)t                    D        dog\n"
+        "ER           bird                      G        again\n"
+        "AX           gall(o)n                  J        judge\n"
+        "IX           dig(i)t                   Z        zoo\n"
+        "                       ZH       plea(s)ure\n"
+        "   DIPHTHONGS                          V        seven\n"
+        "EY           m(a)de                    DH       (th)en\n"
+        "AY           h(igh)\n"
+        "OY           boy\n"
+        "AW           h(ow)                     UNVOICED CONSONANTS\n"
+        "OW           slow                      S         Sam\n"
+        "UW           crew                      Sh        fish\n"
+        "                                       F         fish\n"
+        "                                       TH        thin\n"
+        " SPECIAL PHONEMES                      P         poke\n"
+        "UL           sett(le) (=AXL)           T         talk\n"
+        "UM           astron(omy) (=AXM)        K         cake\n"
+        "UN           functi(on) (=AXN)         CH        speech\n"
+        "Q            kitt-en (glottal stop)    /H        a(h)ead\n");
+}
 
-int debug = 0;
-
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
     int i;
     int phonetic = 0;
+    int speed = 72;
+    int pitch = 64;
+    int mouth = 128;
+    int throat = 128;
 
-    char* wavfilename = NULL;
     char input[256];
 
-    for(i=0; i<256; i++) input[i] = 0;
+    for (i = 0; i < 256; i++)
+        input[i] = 0;
 
-    if (argc <= 1)
-    {
+    if (argc <= 1) {
         PrintUsage();
         return 1;
     }
 
     i = 1;
-    while(i < argc)
-    {
-        if (argv[i][0] != '-')
-        {
+    while (i < argc) {
+        if (argv[i][0] != '-') {
             strncat(input, argv[i], 255);
             strncat(input, " ", 255);
-        } else
-        {
-            if (strcmp(&argv[i][1], "wav")==0)
-            {
-                wavfilename = argv[i+1];
-                i++;
-            } else
-            if (strcmp(&argv[i][1], "sing")==0)
-            {
-                EnableSingmode();
-            } else
-            if (strcmp(&argv[i][1], "phonetic")==0)
-            {
+        } else {
+            if (strcmp(&argv[i][1], "phonetic") == 0) {
                 phonetic = 1;
-            } else
-            if (strcmp(&argv[i][1], "debug")==0)
-            {
-                debug = 1;
-            } else
-            if (strcmp(&argv[i][1], "pitch")==0)
-            {
-                SetPitch(atoi(argv[i+1]));
+            } else if (strcmp(&argv[i][1], "pitch") == 0) {
+                pitch = atoi(argv[i + 1]);
                 i++;
-            } else
-            if (strcmp(&argv[i][1], "speed")==0)
-            {
-                SetSpeed(atoi(argv[i+1]));
+            } else if (strcmp(&argv[i][1], "speed") == 0) {
+                speed = atoi(argv[i + 1]);
                 i++;
-            } else
-            if (strcmp(&argv[i][1], "mouth")==0)
-            {
-                SetMouth(atoi(argv[i+1]));
+            } else if (strcmp(&argv[i][1], "mouth") == 0) {
+                mouth = atoi(argv[i + 1]);
                 i++;
-            } else
-            if (strcmp(&argv[i][1], "throat")==0)
-            {
-                SetThroat(atoi(argv[i+1]));
+            } else if (strcmp(&argv[i][1], "throat") == 0) {
+                throat = atoi(argv[i + 1]);
                 i++;
-            } else
-            {
+            } else {
                 PrintUsage();
                 return 1;
             }
         }
 
         i++;
-    } //while
+    } // while
 
-    for(i=0; input[i] != 0; i++)
+    for (i = 0; input[i] != 0; i++)
         input[i] = toupper((int)input[i]);
 
-    if (debug)
-    {
-        if (phonetic) printf("phonetic input: %s\n", input);
-        else printf("text input: %s\n", input);
+    if (phonetic) {
+        fprintf(stderr, "phonetic input: %s\n", input);
+        strncat(input, "\x9b", sizeof(input) - 1);
+    } else {
+        fprintf(stderr, "text input: %s\n", input);
+        strncat(input, "[", sizeof(input) - 1);
+        if (!TextToPhonemes((unsigned char*)input)) { // overwrites input!
+            fprintf(stderr, "TextToPhonemes failed\n");
+            return 1;
+        }
+        char* eos = memchr(input, 0x9b, sizeof(input));
+        fprintf(stderr, "phonetic output: %*s\n", (int)(eos - input), input);
     }
 
-    if (!phonetic)
-    {
-        strncat(input, "[", 256);
-        if (!TextToPhonemes((unsigned char *)input)) return 1;
-        if (debug)
-            printf("phonetic input: %s\n", input);
-    } else strncat(input, "\x9b", 256);
+    SetSAMInputFull(input, speed, pitch, mouth, throat);
 
-#ifdef USESDL
-    if ( SDL_Init(SDL_INIT_AUDIO) < 0 )
-    {
-        printf("Unable to init SDL: %s\n", SDL_GetError());
-        exit(1);
-    }
-    atexit(SDL_Quit);
-#endif
-
-    SetInput(input);
-    if (!SAMMain())
-    {
+    if (!SAMMain()) {
+        fprintf(stderr, "SAMMain returned fail\n");
         PrintUsage();
         return 1;
     }
 
-    if (wavfilename != NULL)
-        WriteWav(wavfilename, GetBuffer(), GetBufferLength()/50);
-    else
-        OutputSound();
-
-
+    WriteWav(GetBuffer(), GetBufferLength());
     return 0;
-
 }

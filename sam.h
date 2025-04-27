@@ -1,8 +1,8 @@
 #pragma once
 
+int TextToPhonemes(unsigned char* input);
 void SetSAMInputFull(char *_input, unsigned char _speed, unsigned char _pitch, unsigned char _mouth, unsigned char _throat);
-static void SetSAMInput(char *_input) { SetSAMInputFull(_input, 72, 64, 128, 128); }
-
+#define SetSAMInput(_input) SetSAMInputFull(_input, 72, 64, 128, 128)
 int SAMMain();
 
 char* GetBuffer();
