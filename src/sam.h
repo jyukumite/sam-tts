@@ -1,19 +1,12 @@
-#ifndef SAM_H
-#define SAM_H
+#pragma once
 
-void SetInput(char *_input);
-void SetSpeed(unsigned char _speed);
-void SetPitch(unsigned char _pitch);
-void SetMouth(unsigned char _mouth);
-void SetThroat(unsigned char _throat);
-void EnableSingmode();
-void EnableDebug();
+void SetSAMInputFull(char *_input, unsigned char _speed, unsigned char _pitch, unsigned char _mouth, unsigned char _throat);
+static void SetSAMInput(char *_input) { SetSAMInputFull(_input, 72, 64, 128, 128); }
 
 int SAMMain();
 
 char* GetBuffer();
 int GetBufferLength();
-
 
 //char input[]={"/HAALAOAO MAYN NAAMAEAE IHSTT SAEBAASTTIHAAN \x9b\x9b\0"};
 //unsigned char input[]={"/HAALAOAO \x9b\0"};
@@ -33,6 +26,3 @@ int GetBufferLength();
 //unsigned char input[]={" SSHFTHPTKCH/H \x9b\0"};
 
 //unsigned char input[]={" EYAYOYAWOWUW ULUMUNQ YXWXRXLX/XDX\x9b\0"};
-
-
-#endif
